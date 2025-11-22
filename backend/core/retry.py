@@ -48,12 +48,12 @@ class CircuitBreaker:
 
     def __call__(self, func):
         """Decorator to wrap functions with circuit breaker"""
-        def wrapper(*args, **kwargs):
+        async def wrapper(*args, **kwargs):
             if not self.can_attempt():
                 raise ServiceUnavailableError("Circuit breaker is open")
 
             try:
-                result = func(*args, **kwargs)
+                result = await func(*args, **kwargs)
                 self.record_success()
                 return result
             except Exception as e:
