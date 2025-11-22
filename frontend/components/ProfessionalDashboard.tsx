@@ -4,6 +4,7 @@ import { useState } from "react";
 import { getWalletPositions, formatCurrency, formatPercentage, formatTokenAmount, type Position, isLPPosition, isPerpetualPosition } from "@/lib/api";
 import { Wallet, TrendingUp, TrendingDown, Coins, RefreshCw, Search } from "lucide-react";
 import { PerformanceAnalytics } from "./PerformanceAnalytics";
+import { ProfessionalLoading, ProfessionalEmptyState, ProfessionalErrorState } from "./ProfessionalStates";
 
 export default function ProfessionalDashboard() {
   const [walletAddress, setWalletAddress] = useState("");
@@ -98,19 +99,18 @@ export default function ProfessionalDashboard() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Error State */}
         {error && (
-          <div className="bg-[#1C2128] border border-[#F85149] rounded-lg p-4 mb-6">
-            <p className="text-[#F85149]">{error}</p>
-          </div>
+          <ProfessionalErrorState 
+            error={error}
+            retryAction={handleSearch}
+            supportInfo="Please check your wallet address and try again"
+          />
         )}
 
         {/* Loading State */}
         {loading && (
-          <div className="flex items-center justify-center py-12">
-            <div className="text-center">
-              <RefreshCw className="w-8 h-8 text-[#58A6FF] animate-spin mx-auto mb-2" />
-              <p className="text-[#8B949E]">Loading positions...</p>
-            </div>
-          </div>
+          <ProfessionalLoading 
+            message="Analyzing your DeFi portfolio..."
+          />
         )}
 
         {/* Portfolio Overview */}
@@ -183,28 +183,21 @@ export default function ProfessionalDashboard() {
 
         {/* Empty State */}
         {!loading && hasSearched && positions.length === 0 && (
-          <div className="bg-[#161B22] rounded-xl shadow-lg p-12 text-center border border-[#21262D]">
-            <Wallet className="w-16 h-16 text-[#30363D] mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-[#E6EDF3] mb-2">
-              No positions found
-            </h3>
-            <p className="text-[#8B949E]">
-              This wallet doesn't have any DeFi positions.
-            </p>
-          </div>
+          <ProfessionalEmptyState 
+            title="No Positions Found"
+            message="This wallet doesn't have any DeFi positions tracked by DeBank."
+            action="Try entering a different wallet address"
+            icon="wallet"
+          />
         )}
 
         {/* Initial State */}
         {!hasSearched && !loading && (
-          <div className="bg-[#161B22] rounded-xl shadow-lg p-12 text-center border border-[#21262D]">
-            <Search className="w-16 h-16 text-[#30363D] mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-[#E6EDF3] mb-2">
-              Enter a wallet address to get started
-            </h3>
-            <p className="text-[#8B949E]">
-              View LP positions and perpetuals across DeFi protocols
-            </p>
-          </div>
+          <ProfessionalEmptyState 
+            title="Enter a wallet address to get started"
+            message="View LP positions and perpetuals across DeFi protocols powered by real-time DeBank data."
+            icon="search"
+          />
         )}
       </main>
     </div>
