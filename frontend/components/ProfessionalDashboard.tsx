@@ -1,13 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { getWalletPositions, formatCurrency, formatPercentage, formatTokenAmount, type Position, isLPPosition, isPerpetualPosition } from "@/lib/api";
 import { Wallet, TrendingUp, TrendingDown, Coins, RefreshCw, Search } from "lucide-react";
 import { PerformanceAnalytics } from "./PerformanceAnalytics";
 import { ProfessionalLoading, ProfessionalEmptyState, ProfessionalErrorState } from "./ProfessionalStates";
 
 export default function ProfessionalDashboard() {
-  const [walletAddress, setWalletAddress] = useState("");
+  // Load wallet address from localStorage or use default
+  const [walletAddress, setWalletAddress] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('lastWalletAddress') || '0x23b50a703d3076b73584df48251931ebf5937ba2';
+    }
+    return '0x23b50a703d3076b73584df48251931ebf5937ba2';
+  });
   const [positions, setPositions] = useState<Position[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -20,6 +26,11 @@ export default function ProfessionalDashboard() {
     if (!walletAddress.trim()) {
       setError("Please enter a wallet address");
       return;
+    }
+
+    // Save wallet address to localStorage
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lastWalletAddress', walletAddress.trim());
     }
 
     setLoading(true);
@@ -37,6 +48,14 @@ export default function ProfessionalDashboard() {
       setLoading(false);
     }
   };
+
+  // Auto-load wallet data on mount
+  useEffect(() => {
+    if (walletAddress) {
+      handleSearch();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
 
   // Calculate portfolio metrics
   const totalValue = positions.reduce((sum, pos) => sum + pos.total_value_usd, 0);
