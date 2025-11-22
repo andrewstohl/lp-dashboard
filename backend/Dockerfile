@@ -6,8 +6,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
+# Copy application code - maintain backend directory structure
+COPY . ./backend
+
+# Set Python path so imports work
+ENV PYTHONPATH=/app
 
 # Expose port
 EXPOSE 8004

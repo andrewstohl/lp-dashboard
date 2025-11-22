@@ -111,49 +111,140 @@ class DeBankService:
         response.raise_for_status()
 
         data = response.json()
+        
+        # DEBUG: Log what protocols DeBank returned
+        logger.info(f"=" * 80)
+        logger.info(f"DeBank API Response for wallet: {address}")
+        logger.info(f"Response type: {type(data)}")
+        logger.info(f"Number of protocols returned: {len(data) if isinstance(data, list) else 'Not a list'}")
+        
+        if isinstance(data, list):
+            protocol_ids = [p.get("id") for p in data if isinstance(p, dict)]
+            logger.info(f"Protocol IDs found: {protocol_ids}")
+            
+            # Log detailed info for each protocol
+            for protocol in data:
+                if isinstance(protocol, dict):
+                    protocol_id = protocol.get("id", "UNKNOWN")
+                    portfolio_items = protocol.get("portfolio_item_list", [])
+                    logger.info(f"  Protocol: {protocol_id}")
+                    logger.info(f"    - Chain: {protocol.get('chain', 'UNKNOWN')}")
+                    logger.info(f"    - Name: {protocol.get('name', 'UNKNOWN')}")
+                    logger.info(f"    - Portfolio items: {len(portfolio_items)}")
+                    
+                    # Log structure of first portfolio item if available
+                    if portfolio_items and len(portfolio_items) > 0:
+                        first_item = portfolio_items[0]
+                        logger.info(f"    - First item keys: {list(first_item.keys())}")
+                        logger.info(f"    - First item has supply_token_list: {'supply_token_list' in first_item}")
+        else:
+            logger.warning(f"Unexpected response type from DeBank: {type(data)}")
+            logger.warning(f"Response content: {data}")
+        
+        logger.info(f"=" * 80)
+        
         uniswap_positions = []
 
         # Filter for Uniswap v3 positions
-        for protocol in data:
-            if protocol.get("id") == "uniswap3":
-                for portfolio_item in protocol.get("portfolio_item_list", []):
-                    if "supply_token_list" in portfolio_item:
-                        position = self._parse_position(portfolio_item, address)
-                        if position:
-                            uniswap_positions.append(position)
+        if isinstance(data, list):
+            for protocol in data:
+                if not isinstance(protocol, dict):
+                    continue
+                    
+                protocol_id = protocol.get("id", "")
+                logger.info(f"Checking protocol: {protocol_id}")
+                
+                if protocol_id == "uniswap3":
+                    logger.info("Found Uniswap v3 protocol!")
+                    portfolio_items = protocol.get("portfolio_item_list", [])
+                    logger.info(f"Number of portfolio items: {len(portfolio_items)}")
+                    
+                    for idx, portfolio_item in enumerate(portfolio_items):
+                        logger.info(f"Processing portfolio item {idx + 1}/{len(portfolio_items)}")
+                        
+                        # Check if supply_token_list exists in detail
+                        detail = portfolio_item.get("detail", {})
+                        if "supply_token_list" in detail:
+                            position = self._parse_position(portfolio_item, address)
+                            if position:
+                                logger.info(f"Successfully parsed position: {position.get('pool_name')}")
+                                uniswap_positions.append(position)
+                            else:
+                                logger.warning(f"Failed to parse portfolio item {idx + 1}")
+                        else:
+                            logger.warning(f"Portfolio item {idx + 1} missing 'supply_token_list' in detail")
 
+        logger.info(f"Total Uniswap v3 positions found: {len(uniswap_positions)}")
         return uniswap_positions
 
     def _parse_position(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
         """Parse a DeBank portfolio item into our standard format"""
         try:
-            supply_tokens = portfolio_item.get("supply_token_list", [])
+            # Get supply tokens from detail object
+            detail = portfolio_item.get("detail", {})
+            supply_tokens = detail.get("supply_token_list", [])
+            
             if len(supply_tokens) < 2:
+                logger.warning(f"Position has fewer than 2 tokens: {len(supply_tokens)}")
                 return None
 
             token0 = supply_tokens[0]
             token1 = supply_tokens[1]
+            
+            # Get pool information
+            pool = portfolio_item.get("pool", {})
+            pool_id = pool.get("id", "")
+            position_index = portfolio_item.get("position_index", "")
+            
+            # Get stats
+            stats = portfolio_item.get("stats", {})
+            total_value = float(stats.get("asset_usd_value", 0))
+            
+            # Get reward tokens if available
+            reward_tokens = detail.get("reward_token_list", [])
+            total_rewards_usd = sum(
+                float(token.get("price", 0)) * float(token.get("amount", 0))
+                for token in reward_tokens
+            )
 
-            return {
+            position = {
                 "pool_name": f"{token0.get('symbol', 'UNK')}/{token1.get('symbol', 'UNK')}",
-                "pool_address": portfolio_item.get("pool_id", ""),
+                "pool_address": pool_id,
+                "position_index": position_index,
+                "chain": portfolio_item.get("chain", pool.get("chain", "eth")),
                 "token0": {
                     "symbol": token0.get("symbol", ""),
                     "address": token0.get("id", ""),
                     "amount": float(token0.get("amount", 0)),
+                    "price": float(token0.get("price", 0)),
                     "value_usd": float(token0.get("price", 0)) * float(token0.get("amount", 0))
                 },
                 "token1": {
                     "symbol": token1.get("symbol", ""),
                     "address": token1.get("id", ""),
                     "amount": float(token1.get("amount", 0)),
+                    "price": float(token1.get("price", 0)),
                     "value_usd": float(token1.get("price", 0)) * float(token1.get("amount", 0))
                 },
-                "total_value_usd": float(portfolio_item.get("stats", {}).get("asset_usd_value", 0)),
-                "daily_fee_24h": float(portfolio_item.get("detail", {}).get("daily_fee_24h", 0)),
+                "total_value_usd": total_value,
+                "unclaimed_fees_usd": total_rewards_usd,
+                "reward_tokens": [
+                    {
+                        "symbol": token.get("symbol", ""),
+                        "address": token.get("id", ""),
+                        "amount": float(token.get("amount", 0)),
+                        "value_usd": float(token.get("price", 0)) * float(token.get("amount", 0))
+                    }
+                    for token in reward_tokens
+                ] if reward_tokens else []
             }
+            
+            return position
+            
         except Exception as e:
             logger.warning(f"Error parsing position: {e}")
+            import traceback
+            logger.warning(traceback.format_exc())
             return None
 
 # Global service instance with lifecycle management
