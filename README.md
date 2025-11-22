@@ -46,6 +46,7 @@ docker-compose up
 ```
 
 4. Access the application:
+- **Frontend Dashboard**: http://localhost:3000
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 - Health Check: http://localhost:8000/health
@@ -261,7 +262,7 @@ GitHub Actions automatically runs tests on every push:
   - [x] Comprehensive testing
   - [x] Docker Compose setup
   - [x] GitHub Actions CI/CD
-  - [ ] Frontend (Next.js)
+  - [x] Frontend (Next.js)
 
 - [ ] **Phase 2**: AI Agent Infrastructure
   - [ ] Kimi K2 integration

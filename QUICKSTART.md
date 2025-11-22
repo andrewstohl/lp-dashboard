@@ -21,18 +21,21 @@ cp .env.example .env
 docker-compose up
 ```
 
-### 3. Access the API
-- API: http://localhost:8000
-- Docs: http://localhost:8000/docs
-- Health: http://localhost:8000/health
+### 3. Access the application
+- **Frontend Dashboard**: http://localhost:3000 ⭐ **Start here!**
+- Backend API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
 
-### 4. Test an endpoint
+### 4. Use the dashboard
+1. Open http://localhost:3000 in your browser
+2. Enter an Ethereum wallet address
+3. Click "Analyze" to view LP positions
+4. See real-time position data, fees, and analytics
+
+Or test via API:
 ```bash
-# Test with a valid Ethereum address
 curl http://localhost:8000/api/v1/wallet/0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
-
-# Test health endpoint
-curl http://localhost:8000/health
 ```
 
 ---
