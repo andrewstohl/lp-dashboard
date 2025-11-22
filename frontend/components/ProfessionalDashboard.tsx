@@ -48,18 +48,18 @@ export default function ProfessionalDashboard() {
   const totalPnL = perpPositions.reduce((sum, pos) => sum + pos.pnl_usd, 0);
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
+    <div className="min-h-screen bg-[#0D1117]">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm">
+      <header className="bg-[#161B22] border-b border-[#21262D] shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="text-center mb-6">
             <div className="flex items-center justify-center gap-3 mb-2">
-              <Wallet className="w-10 h-10 text-blue-600" />
-              <h1 className="text-4xl font-bold text-gray-900">
+              <Wallet className="w-10 h-10 text-[#58A6FF]" />
+              <h1 className="text-4xl font-bold text-[#E6EDF3]">
                 DeFi Portfolio Intelligence
               </h1>
             </div>
-            <p className="text-gray-600">
+            <p className="text-[#8B949E]">
               Powered by DeBank API - Real DeFi Data
             </p>
           </div>
@@ -73,14 +73,14 @@ export default function ProfessionalDashboard() {
                   value={walletAddress}
                   onChange={(e) => setWalletAddress(e.target.value)}
                   placeholder="Enter wallet address (0x...)"
-                  className="w-full px-4 py-3 pl-12 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
+                  className="w-full px-4 py-3 pl-12 bg-[#1C2128] border border-[#30363D] text-[#E6EDF3] placeholder-[#8B949E] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#58A6FF] focus:border-transparent"
                 />
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8B949E]" />
               </div>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors font-medium"
+                className="px-6 py-3 bg-[#58A6FF] text-[#0D1117] rounded-lg hover:bg-[#79C0FF] disabled:bg-[#30363D] disabled:cursor-not-allowed transition-colors font-medium"
               >
                 {loading ? (
                   <RefreshCw className="w-5 h-5 animate-spin" />
@@ -97,8 +97,8 @@ export default function ProfessionalDashboard() {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Error State */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <p className="text-red-800">{error}</p>
+          <div className="bg-[#1C2128] border border-[#F85149] rounded-lg p-4 mb-6">
+            <p className="text-[#F85149]">{error}</p>
           </div>
         )}
 
@@ -106,8 +106,8 @@ export default function ProfessionalDashboard() {
         {loading && (
           <div className="flex items-center justify-center py-12">
             <div className="text-center">
-              <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-2" />
-              <p className="text-gray-600">Loading positions...</p>
+              <RefreshCw className="w-8 h-8 text-[#58A6FF] animate-spin mx-auto mb-2" />
+              <p className="text-[#8B949E]">Loading positions...</p>
             </div>
           </div>
         )}
@@ -115,46 +115,46 @@ export default function ProfessionalDashboard() {
         {/* Portfolio Overview */}
         {!loading && hasSearched && positions.length > 0 && (
           <>
-            <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+            <div className="bg-[#161B22] rounded-xl shadow-lg p-6 mb-8 border border-[#21262D]">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-2xl font-bold text-gray-900">
+                <h2 className="text-2xl font-bold text-[#E6EDF3]">
                   Portfolio Overview
                 </h2>
                 {lastUpdated && (
-                  <span className="text-sm text-gray-500">
+                  <span className="text-sm text-[#8B949E]">
                     Updated {lastUpdated.toLocaleTimeString()}
                   </span>
                 )}
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                <div className="text-center bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4">
-                  <p className="text-sm text-green-700 mb-1 font-medium">Total Value</p>
-                  <p className="text-3xl font-bold text-green-900">
+                <div className="text-center bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
+                  <p className="text-sm text-[#8B949E] mb-1 font-medium">Total Value</p>
+                  <p className="text-3xl font-bold text-[#3FB950]">
                     {formatCurrency(totalValue)}
                   </p>
                 </div>
                 
-                <div className="text-center bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4">
-                  <p className="text-sm text-blue-700 mb-1 font-medium">Unclaimed Fees</p>
-                  <p className="text-3xl font-bold text-blue-900">
+                <div className="text-center bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
+                  <p className="text-sm text-[#8B949E] mb-1 font-medium">Unclaimed Fees</p>
+                  <p className="text-3xl font-bold text-[#58A6FF]">
                     {formatCurrency(totalDailyFees)}
                   </p>
                 </div>
                 
-                <div className="text-center bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4">
-                  <p className="text-sm text-purple-700 mb-1 font-medium">Perps P&L</p>
-                  <p className={`text-3xl font-bold ${totalPnL >= 0 ? 'text-green-900' : 'text-red-900'}`}>
+                <div className="text-center bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
+                  <p className="text-sm text-[#8B949E] mb-1 font-medium">Perps P&L</p>
+                  <p className={`text-3xl font-bold ${totalPnL >= 0 ? 'text-[#3FB950]' : 'text-[#F85149]'}`}>
                     {totalPnL >= 0 ? '+' : ''}{formatCurrency(totalPnL)}
                   </p>
                 </div>
                 
-                <div className="text-center bg-gradient-to-br from-gray-50 to-gray-100 rounded-lg p-4">
-                  <p className="text-sm text-gray-700 mb-1 font-medium">Total Positions</p>
-                  <p className="text-3xl font-bold text-gray-900">
+                <div className="text-center bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
+                  <p className="text-sm text-[#8B949E] mb-1 font-medium">Total Positions</p>
+                  <p className="text-3xl font-bold text-[#E6EDF3]">
                     {positions.length}
                   </p>
-                  <p className="text-xs text-gray-600 mt-1">
+                  <p className="text-xs text-[#8B949E] mt-1">
                     {lpPositions.length} LP • {perpPositions.length} Perps
                   </p>
                 </div>
@@ -172,12 +172,12 @@ export default function ProfessionalDashboard() {
 
         {/* Empty State */}
         {!loading && hasSearched && positions.length === 0 && (
-          <div className="bg-white rounded-xl shadow-lg p-12 text-center">
-            <Wallet className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+          <div className="bg-[#161B22] rounded-xl shadow-lg p-12 text-center border border-[#21262D]">
+            <Wallet className="w-16 h-16 text-[#30363D] mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-[#E6EDF3] mb-2">
               No positions found
             </h3>
-            <p className="text-gray-600">
+            <p className="text-[#8B949E]">
               This wallet doesn't have any DeFi positions.
             </p>
           </div>
@@ -185,12 +185,12 @@ export default function ProfessionalDashboard() {
 
         {/* Initial State */}
         {!hasSearched && !loading && (
-          <div className="bg-white rounded-xl shadow-lg p-12 text-center">
-            <Search className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
+          <div className="bg-[#161B22] rounded-xl shadow-lg p-12 text-center border border-[#21262D]">
+            <Search className="w-16 h-16 text-[#30363D] mx-auto mb-4" />
+            <h3 className="text-xl font-semibold text-[#E6EDF3] mb-2">
               Enter a wallet address to get started
             </h3>
-            <p className="text-gray-600">
+            <p className="text-[#8B949E]">
               View LP positions and perpetuals across DeFi protocols
             </p>
           </div>
@@ -213,45 +213,45 @@ function PositionCard({ position, index }: { position: Position; index: number }
 // LP Position Card
 function LPCard({ position, index }: { position: any; index: number }) {
   return (
-    <div className="bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow border-l-4 border-blue-500">
+    <div className="bg-[#161B22] rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow border-l-4 border-[#58A6FF]">
       {/* Header */}
       <div className="flex justify-between items-start mb-4">
         <div className="flex items-center gap-2">
-          <Coins className="w-6 h-6 text-blue-600" />
+          <Coins className="w-6 h-6 text-[#58A6FF]" />
           <div>
-            <h3 className="text-xl font-bold text-gray-900">
+            <h3 className="text-xl font-bold text-[#E6EDF3]">
               {position.pool_name}
             </h3>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-[#8B949E]">
               {position.chain.toUpperCase()} • {position.pool_address.slice(0, 6)}...{position.pool_address.slice(-4)}
             </p>
           </div>
         </div>
         
         <div className="text-right">
-          <p className="text-sm text-gray-600">Total Value</p>
-          <p className="text-2xl font-bold text-green-600">
+          <p className="text-sm text-[#8B949E]">Total Value</p>
+          <p className="text-2xl font-bold text-[#3FB950]">
             {formatCurrency(position.total_value_usd)}
           </p>
         </div>
       </div>
 
       {/* Token Details */}
-      <div className="space-y-3 mb-4 bg-gray-50 rounded-lg p-4">
+      <div className="space-y-3 mb-4 bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
         <div className="flex justify-between items-center">
-          <span className="text-gray-700 font-medium">{position.token0.symbol}</span>
+          <span className="text-[#E6EDF3] font-medium">{position.token0.symbol}</span>
           <div className="text-right">
-            <span className="font-semibold text-gray-900">{formatTokenAmount(position.token0.amount)}</span>
-            <span className="text-sm text-gray-500 ml-2">
+            <span className="font-semibold text-[#E6EDF3]">{formatTokenAmount(position.token0.amount)}</span>
+            <span className="text-sm text-[#8B949E] ml-2">
               {formatCurrency(position.token0.value_usd)}
             </span>
           </div>
         </div>
-        <div className="border-t border-gray-200 pt-3 flex justify-between items-center">
-          <span className="text-gray-700 font-medium">{position.token1.symbol}</span>
+        <div className="border-t border-[#21262D] pt-3 flex justify-between items-center">
+          <span className="text-[#E6EDF3] font-medium">{position.token1.symbol}</span>
           <div className="text-right">
-            <span className="font-semibold text-gray-900">{formatTokenAmount(position.token1.amount)}</span>
-            <span className="text-sm text-gray-500 ml-2">
+            <span className="font-semibold text-[#E6EDF3]">{formatTokenAmount(position.token1.amount)}</span>
+            <span className="text-sm text-[#8B949E] ml-2">
               {formatCurrency(position.token1.value_usd)}
             </span>
           </div>
@@ -260,10 +260,10 @@ function LPCard({ position, index }: { position: any; index: number }) {
 
       {/* Unclaimed Fees */}
       {position.unclaimed_fees_usd > 0 && (
-        <div className="bg-green-50 rounded-lg p-4">
+        <div className="bg-[#1C2128] rounded-lg p-4 border border-[#21262D]">
           <div className="flex justify-between items-center">
-            <span className="text-green-800 font-semibold">Unclaimed Fees</span>
-            <span className="text-green-900 font-bold text-xl">
+            <span className="text-[#3FB950] font-semibold">Unclaimed Fees</span>
+            <span className="text-[#3FB950] font-bold text-xl">
               {formatCurrency(position.unclaimed_fees_usd)}
             </span>
           </div>
@@ -279,35 +279,35 @@ function PerpCard({ position, index }: { position: any; index: number }) {
   const isLong = position.side === "Long";
   
   return (
-    <div className={`bg-white rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow border-l-4 ${isLong ? 'border-green-500' : 'border-red-500'}`}>
+    <div className={`bg-[#161B22] rounded-xl shadow-lg p-6 hover:shadow-xl transition-shadow border-l-4 ${isLong ? 'border-[#3FB950]' : 'border-[#F85149]'}`}>
       {/* Header */}
       <div className="flex justify-between items-start mb-4">
         <div className="flex items-center gap-2">
           {isLong ? (
-            <TrendingUp className="w-6 h-6 text-green-600" />
+            <TrendingUp className="w-6 h-6 text-[#3FB950]" />
           ) : (
-            <TrendingDown className="w-6 h-6 text-red-600" />
+            <TrendingDown className="w-6 h-6 text-[#F85149]" />
           )}
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-xl font-bold text-gray-900">
+              <h3 className="text-xl font-bold text-[#E6EDF3]">
                 {position.position_name}
               </h3>
               <span className={`px-2 py-1 rounded text-xs font-bold ${
-                isLong ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                isLong ? 'bg-[#1C2128] text-[#3FB950] border border-[#3FB950]' : 'bg-[#1C2128] text-[#F85149] border border-[#F85149]'
               }`}>
                 {position.side.toUpperCase()}
               </span>
             </div>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-[#8B949E]">
               {position.protocol} • {position.chain.toUpperCase()}
             </p>
           </div>
         </div>
         
         <div className="text-right">
-          <p className="text-sm text-gray-600">P&L</p>
-          <p className={`text-2xl font-bold ${isProfitable ? 'text-green-600' : 'text-red-600'}`}>
+          <p className="text-sm text-[#8B949E]">P&L</p>
+          <p className={`text-2xl font-bold ${isProfitable ? 'text-[#3FB950]' : 'text-[#F85149]'}`}>
             {isProfitable ? '+' : ''}{formatCurrency(position.pnl_usd)}
           </p>
         </div>
@@ -315,40 +315,40 @@ function PerpCard({ position, index }: { position: any; index: number }) {
 
       {/* Position Details Grid */}
       <div className="grid grid-cols-2 gap-4 mb-4">
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-xs text-gray-500 mb-1">Position Size</p>
-          <p className="font-semibold text-gray-900">
+        <div className="bg-[#1C2128] rounded-lg p-3 border border-[#21262D]">
+          <p className="text-xs text-[#8B949E] mb-1">Position Size</p>
+          <p className="font-semibold text-[#E6EDF3]">
             {formatTokenAmount(position.position_size)} {position.base_token.symbol}
           </p>
-          <p className="text-xs text-gray-500">
+          <p className="text-xs text-[#8B949E]">
             {formatCurrency(position.position_value_usd)}
           </p>
         </div>
 
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-xs text-gray-500 mb-1">Leverage</p>
-          <p className="font-semibold text-gray-900">{position.leverage.toFixed(2)}x</p>
-          <p className="text-xs text-gray-500">
+        <div className="bg-[#1C2128] rounded-lg p-3 border border-[#21262D]">
+          <p className="text-xs text-[#8B949E] mb-1">Leverage</p>
+          <p className="font-semibold text-[#E6EDF3]">{position.leverage.toFixed(2)}x</p>
+          <p className="text-xs text-[#8B949E]">
             Margin: {formatCurrency(position.margin_token.value_usd)}
           </p>
         </div>
 
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-xs text-gray-500 mb-1">Entry Price</p>
-          <p className="font-semibold text-gray-900">{formatCurrency(position.entry_price)}</p>
+        <div className="bg-[#1C2128] rounded-lg p-3 border border-[#21262D]">
+          <p className="text-xs text-[#8B949E] mb-1">Entry Price</p>
+          <p className="font-semibold text-[#E6EDF3]">{formatCurrency(position.entry_price)}</p>
         </div>
 
-        <div className="bg-gray-50 rounded-lg p-3">
-          <p className="text-xs text-gray-500 mb-1">Mark Price</p>
-          <p className="font-semibold text-gray-900">{formatCurrency(position.mark_price)}</p>
+        <div className="bg-[#1C2128] rounded-lg p-3 border border-[#21262D]">
+          <p className="text-xs text-[#8B949E] mb-1">Mark Price</p>
+          <p className="font-semibold text-[#E6EDF3]">{formatCurrency(position.mark_price)}</p>
         </div>
       </div>
 
       {/* Liquidation Warning */}
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+      <div className="bg-[#1C2128] border border-[#F59E0B] rounded-lg p-3">
         <div className="flex justify-between items-center">
-          <span className="text-xs text-yellow-800 font-medium">Liquidation Price</span>
-          <span className="text-sm font-bold text-yellow-900">
+          <span className="text-xs text-[#F59E0B] font-medium">Liquidation Price</span>
+          <span className="text-sm font-bold text-[#F59E0B]">
             {formatCurrency(position.liquidation_price)}
           </span>
         </div>
