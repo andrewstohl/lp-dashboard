@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { getWalletPositions, formatCurrency, formatPercentage, formatTokenAmount, type Position, isLPPosition, isPerpetualPosition } from "@/lib/api";
 import { Wallet, TrendingUp, TrendingDown, Coins, RefreshCw, Search } from "lucide-react";
+import { PerformanceAnalytics } from "./PerformanceAnalytics";
 
 export default function ProfessionalDashboard() {
   const [walletAddress, setWalletAddress] = useState("");
@@ -160,6 +161,16 @@ export default function ProfessionalDashboard() {
                 </div>
               </div>
             </div>
+
+            {/* Performance Analytics Section */}
+            {lpPositions.length > 0 && (
+              <div className="mb-8">
+                <PerformanceAnalytics 
+                  totalDailyFees={totalDailyFees}
+                  totalValue={lpPositions.reduce((sum, pos) => sum + pos.total_value_usd, 0)}
+                />
+              </div>
+            )}
 
             {/* Position Cards Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
