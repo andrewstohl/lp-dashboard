@@ -1,0 +1,52 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import logging
+
+from backend.core.config import settings
+from backend.core.logging_config import setup_logging
+from backend.services.debank import close_debank_service
+from backend.app.api.v1 import wallet
+
+# Setup logging
+setup_logging(settings.log_level)
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup and shutdown events"""
+    logger.info("Starting LP Dashboard API")
+    yield
+    logger.info("Shutting down LP Dashboard API")
+    await close_debank_service()
+
+app = FastAPI(
+    title="LP Dashboard API",
+    description="DeFi Liquidity Position Analytics",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],  # Frontend dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Routes
+app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
+
+@app.get("/")
+async def root():
+    return {
+        "status": "operational",
+        "service": "LP Dashboard API",
+        "version": "0.1.0"
+    }
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
