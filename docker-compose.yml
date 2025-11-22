@@ -19,19 +19,20 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     ports:
-      - "8000:8000"
+      - "8001:8001"
     environment:
       - REDIS_URL=redis://redis:6379
       - DEBANK_ACCESS_KEY=${DEBANK_ACCESS_KEY}
       - KIMI_API_KEY=${KIMI_API_KEY:-}
       - LOG_LEVEL=INFO
       - ENVIRONMENT=development
+      - BACKEND_PORT=8001
     volumes:
       - ./backend:/app
     depends_on:
       redis:
         condition: service_healthy
-    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn backend.app.main:app --host 0.0.0.0 --port 8001 --reload
 
 volumes:
   redis_data:
