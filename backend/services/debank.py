@@ -143,9 +143,9 @@ class DeBankService:
         
         logger.info(f"=" * 80)
         
-        uniswap_positions = []
+        all_positions = []
 
-        # Filter for Uniswap v3 positions
+        # Process all protocols
         if isinstance(data, list):
             for protocol in data:
                 if not isinstance(protocol, dict):
@@ -154,30 +154,50 @@ class DeBankService:
                 protocol_id = protocol.get("id", "")
                 logger.info(f"Checking protocol: {protocol_id}")
                 
+                # Handle Uniswap v3 LP positions
                 if protocol_id == "uniswap3":
                     logger.info("Found Uniswap v3 protocol!")
                     portfolio_items = protocol.get("portfolio_item_list", [])
                     logger.info(f"Number of portfolio items: {len(portfolio_items)}")
                     
                     for idx, portfolio_item in enumerate(portfolio_items):
-                        logger.info(f"Processing portfolio item {idx + 1}/{len(portfolio_items)}")
+                        logger.info(f"Processing Uniswap portfolio item {idx + 1}/{len(portfolio_items)}")
                         
                         # Check if supply_token_list exists in detail
                         detail = portfolio_item.get("detail", {})
                         if "supply_token_list" in detail:
-                            position = self._parse_position(portfolio_item, address)
+                            position = self._parse_uniswap_position(portfolio_item, address)
                             if position:
-                                logger.info(f"Successfully parsed position: {position.get('pool_name')}")
-                                uniswap_positions.append(position)
+                                logger.info(f"Successfully parsed Uniswap position: {position.get('pool_name')}")
+                                all_positions.append(position)
                             else:
-                                logger.warning(f"Failed to parse portfolio item {idx + 1}")
+                                logger.warning(f"Failed to parse Uniswap portfolio item {idx + 1}")
                         else:
                             logger.warning(f"Portfolio item {idx + 1} missing 'supply_token_list' in detail")
+                
+                # Handle GMX V2 perpetuals
+                elif protocol_id == "arb_gmx2":
+                    logger.info("Found GMX V2 protocol!")
+                    portfolio_items = protocol.get("portfolio_item_list", [])
+                    logger.info(f"Number of GMX items: {len(portfolio_items)}")
+                    
+                    for idx, portfolio_item in enumerate(portfolio_items):
+                        detail_types = portfolio_item.get("detail_types", [])
+                        
+                        # Only process perpetuals positions
+                        if "perpetuals" in detail_types:
+                            logger.info(f"Processing GMX perpetuals item {idx + 1}/{len(portfolio_items)}")
+                            position = self._parse_gmx_perpetual(portfolio_item, address)
+                            if position:
+                                logger.info(f"Successfully parsed GMX perpetual: {position.get('position_name')}")
+                                all_positions.append(position)
+                            else:
+                                logger.warning(f"Failed to parse GMX perpetual item {idx + 1}")
 
-        logger.info(f"Total Uniswap v3 positions found: {len(uniswap_positions)}")
-        return uniswap_positions
+        logger.info(f"Total positions found: {len(all_positions)}")
+        return all_positions
 
-    def _parse_position(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
+    def _parse_uniswap_position(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
         """Parse a DeBank portfolio item into our standard format"""
         try:
             # Get supply tokens from detail object
@@ -243,6 +263,72 @@ class DeBankService:
             
         except Exception as e:
             logger.warning(f"Error parsing position: {e}")
+            import traceback
+            logger.warning(traceback.format_exc())
+            return None
+
+    def _parse_gmx_perpetual(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
+        """Parse a GMX perpetual position into our standard format"""
+        try:
+            detail = portfolio_item.get("detail", {})
+            stats = portfolio_item.get("stats", {})
+            
+            # Get position tokens
+            margin_token = detail.get("margin_token", {})
+            position_token = detail.get("position_token", {})
+            base_token = detail.get("base_token", {})
+            
+            # Get position data
+            side = detail.get("side", "Unknown")  # "Long" or "Short"
+            entry_price = float(detail.get("entry_price", 0))
+            mark_price = float(detail.get("mark_price", 0))
+            liquidation_price = float(detail.get("liquidation_price", 0))
+            leverage = float(detail.get("leverage", 0))
+            pnl_usd = float(detail.get("pnl_usd_value", 0))
+            
+            # Get asset values
+            asset_usd = float(stats.get("asset_usd_value", 0))
+            debt_usd = float(stats.get("debt_usd_value", 0))
+            net_usd = float(stats.get("net_usd_value", 0))
+            
+            # Get position size
+            position_size = float(position_token.get("amount", 0))
+            
+            position = {
+                "type": "perpetual",
+                "protocol": "GMX V2",
+                "position_name": f"{side} {base_token.get('symbol', 'UNK')}",
+                "chain": portfolio_item.get("chain", "arb"),
+                "side": side,
+                "base_token": {
+                    "symbol": base_token.get("symbol", ""),
+                    "address": base_token.get("id", ""),
+                    "price": float(base_token.get("price", 0))
+                },
+                "margin_token": {
+                    "symbol": margin_token.get("symbol", ""),
+                    "address": margin_token.get("id", ""),
+                    "amount": float(margin_token.get("amount", 0)),
+                    "price": float(margin_token.get("price", 0)),
+                    "value_usd": float(margin_token.get("amount", 0)) * float(margin_token.get("price", 0))
+                },
+                "position_size": position_size,
+                "position_value_usd": position_size * mark_price,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
+                "liquidation_price": liquidation_price,
+                "leverage": leverage,
+                "pnl_usd": pnl_usd,
+                "total_value_usd": asset_usd,
+                "debt_usd": debt_usd,
+                "net_value_usd": net_usd,
+                "position_index": portfolio_item.get("position_index", "")
+            }
+            
+            return position
+            
+        except Exception as e:
+            logger.warning(f"Error parsing GMX perpetual: {e}")
             import traceback
             logger.warning(traceback.format_exc())
             return None
