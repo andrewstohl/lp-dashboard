@@ -30,7 +30,7 @@ app = FastAPI(
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],  # Frontend dev server (changed to avoid conflicts)
+    allow_origins=["http://localhost:4001"],  # Frontend dev server (port 4001 - confirmed free)
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

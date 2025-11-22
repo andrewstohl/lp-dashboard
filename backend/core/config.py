@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     # Backend
     backend_host: str = "0.0.0.0"
-    backend_port: int = 8000
+    backend_port: int = 8004
     environment: str = Field(default="development", description="dev/staging/production")
 
     # Redis

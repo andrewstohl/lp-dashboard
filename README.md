@@ -46,9 +46,9 @@ docker-compose up
 ```
 
 4. Access the application:
-- Backend API: http://localhost:8001
-- API Docs: http://localhost:8001/docs
-- Health Check: http://localhost:8001/health
+- Backend API: http://localhost:8004
+- API Docs: http://localhost:8004/docs
+- Health Check: http://localhost:8004/health
 
 ### Running Tests
 
@@ -95,7 +95,7 @@ Get all Uniswap v3 positions for an Ethereum address.
 
 **Example Request:**
 ```bash
-curl http://localhost:8001/api/v1/wallet/0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
+curl http://localhost:8004/api/v1/wallet/0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
 ```
 
 **Success Response (200):**
@@ -296,7 +296,7 @@ MIT
 
 For issues or questions:
 - Open an issue on GitHub
-- Check the [API documentation](http://localhost:8001/docs)
+- Check the [API documentation](http://localhost:8004/docs)
 
 ---
 
