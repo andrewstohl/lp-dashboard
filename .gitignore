@@ -80,3 +80,9 @@ out/
 
 # Docker
 docker-compose.override.yml
+
+# Debug files (ADD THIS SECTION)
+debug_*.py
+*_raw_response.json
+test_*.py
+!backend/tests/test_*.py
