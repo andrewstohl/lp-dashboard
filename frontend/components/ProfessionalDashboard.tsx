@@ -5,6 +5,7 @@ import { getWalletPositions, formatCurrency, formatPercentage, formatTokenAmount
 import { Wallet, TrendingUp, TrendingDown, Coins, RefreshCw, Search } from "lucide-react";
 import { PerformanceAnalytics } from "./PerformanceAnalytics";
 import { ProfessionalLoading, ProfessionalEmptyState, ProfessionalErrorState } from "./ProfessionalStates";
+import { DecisionIntelligence } from "./DecisionIntelligence";
 
 export default function ProfessionalDashboard() {
   // Load wallet address from localStorage or use default
@@ -192,11 +193,20 @@ export default function ProfessionalDashboard() {
             )}
 
             {/* Position Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
               {positions.map((position, index) => (
                 <PositionCard key={index} position={position} index={index} />
               ))}
             </div>
+
+            {/* Decision Intelligence Section */}
+            <DecisionIntelligence 
+              positions={positions}
+              totalValue={totalValue}
+              totalFees={totalDailyFees}
+              lpCount={lpPositions.length}
+              perpCount={perpPositions.length}
+            />
           </>
         )}
 
