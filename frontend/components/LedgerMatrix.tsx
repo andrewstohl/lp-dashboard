@@ -206,9 +206,9 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                     <thead>
                       <tr className="border-b border-[#21262D]">
                         <th className="px-4 py-3 text-left text-[#8B949E] font-medium w-28"></th>
-                        <th className="px-4 py-3 text-right text-[#8B949E] font-medium">{token0Exposure.symbol}</th>
-                        <th className="px-4 py-3 text-right text-[#8B949E] font-medium">{token1Exposure.symbol}</th>
-                        <th className="px-4 py-3 text-right text-[#8B949E] font-medium">TOTAL</th>
+                        <th className="px-4 py-3 text-right text-lg font-bold text-[#E6EDF3]">{token0Exposure.symbol}</th>
+                        <th className="px-4 py-3 text-right text-lg font-bold text-[#E6EDF3]">{token1Exposure.symbol}</th>
+                        <th className="px-4 py-3 text-right text-lg font-bold text-[#E6EDF3]">TOTAL</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -217,11 +217,11 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                         <td className="px-4 py-3 text-[#E6EDF3] font-medium">LP POSITION</td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.lpValue)}</div>
-                          <div className="text-sm text-[#8B949E]">{formatAmount(token0Exposure.lpAmount)} {token0Exposure.symbol}</div>
+                          <div className="text-sm text-[#8B949E]">{formatAmount(token0Exposure.lpAmount)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.lpValue)}</div>
-                          <div className="text-sm text-[#8B949E]">{formatAmount(token1Exposure.lpAmount)} {token1Exposure.symbol}</div>
+                          <div className="text-sm text-[#8B949E]">{formatAmount(token1Exposure.lpAmount)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(matched.totalLpValue)}</div>
@@ -233,34 +233,34 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                         <td className="px-4 py-3 text-[#E6EDF3] font-medium">PERP HEDGE</td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.perpValue)}</div>
-                          <div className="text-sm text-[#8B949E]">{formatAmount(token0Exposure.perpAmount)} {token0Exposure.symbol}</div>
+                          <div className="text-sm text-[#8B949E]">{formatAmount(token0Exposure.perpAmount)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.perpValue)}</div>
-                          <div className="text-sm text-[#8B949E]">{formatAmount(token1Exposure.perpAmount)} {token1Exposure.symbol}</div>
+                          <div className="text-sm text-[#8B949E]">{formatAmount(token1Exposure.perpAmount)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(matched.totalPerpValue)}</div>
                         </td>
                       </tr>
                       
-                      {/* NET Row - ONLY token amounts get conditional coloring */}
+                      {/* NET Row - USD amounts and TOTAL get conditional coloring */}
                       <tr className="bg-[#21262D]">
                         <td className="px-4 py-3 text-[#A371F7] font-bold">NET</td>
                         <td className="px-4 py-3 text-right">
-                          <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.netValue)}</div>
+                          <div className={`text-lg font-bold ${getNetColor(token0Exposure.netValue)}`}>{formatUsd(token0Exposure.netValue)}</div>
                           <div className={`text-sm font-semibold ${getNetColor(token0Exposure.netAmount)}`}>
-                            {formatAmount(token0Exposure.netAmount)} {token0Exposure.symbol}
+                            {formatAmount(token0Exposure.netAmount)}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.netValue)}</div>
+                          <div className={`text-lg font-bold ${getNetColor(token1Exposure.netValue)}`}>{formatUsd(token1Exposure.netValue)}</div>
                           <div className={`text-sm font-semibold ${getNetColor(token1Exposure.netAmount)}`}>
-                            {formatAmount(token1Exposure.netAmount)} {token1Exposure.symbol}
+                            {formatAmount(token1Exposure.netAmount)}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(matched.totalNetValue)}</div>
+                          <div className={`text-lg font-bold ${getNetColor(matched.totalNetValue)}`}>{formatUsd(matched.totalNetValue)}</div>
                         </td>
                       </tr>
                       
@@ -295,14 +295,14 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                         </td>
                       </tr>
                       
-                      {/* TOTAL P&L Row - ONLY grand total gets conditional coloring */}
+                      {/* TOTAL P&L Row - all amounts get conditional coloring */}
                       <tr className="bg-[#21262D]">
                         <td className="px-4 py-3 text-[#A371F7] font-bold">TOTAL P&L</td>
                         <td className="px-4 py-3 text-right">
-                          <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.totalPnl)}</div>
+                          <div className={`text-lg font-bold ${getNetColor(token0Exposure.totalPnl)}`}>{formatUsd(token0Exposure.totalPnl)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <div className="text-lg font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.totalPnl)}</div>
+                          <div className={`text-lg font-bold ${getNetColor(token1Exposure.totalPnl)}`}>{formatUsd(token1Exposure.totalPnl)}</div>
                         </td>
                         <td className="px-4 py-3 text-right">
                           <div className={`text-xl font-bold ${getNetColor(matched.grandTotalPnl)}`}>
@@ -324,22 +324,22 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                         <span className="text-[#8B949E] text-sm">LP</span>
                         <div className="text-right">
                           <div className="font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.lpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0Exposure.lpAmount)} {token0Exposure.symbol}</div>
+                          <div className="text-xs text-[#8B949E]">{formatAmount(token0Exposure.lpAmount)}</div>
                         </div>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-[#8B949E] text-sm">Perp</span>
                         <div className="text-right">
                           <div className="font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.perpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0Exposure.perpAmount)} {token0Exposure.symbol}</div>
+                          <div className="text-xs text-[#8B949E]">{formatAmount(token0Exposure.perpAmount)}</div>
                         </div>
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-[#30363D]">
                         <span className="text-[#A371F7] font-bold text-sm">Net</span>
                         <div className="text-right">
-                          <div className="font-bold text-[#E6EDF3]">{formatUsd(token0Exposure.netValue)}</div>
+                          <div className={`font-bold ${getNetColor(token0Exposure.netValue)}`}>{formatUsd(token0Exposure.netValue)}</div>
                           <div className={`text-xs font-semibold ${getNetColor(token0Exposure.netAmount)}`}>
-                            {formatAmount(token0Exposure.netAmount)} {token0Exposure.symbol}
+                            {formatAmount(token0Exposure.netAmount)}
                           </div>
                         </div>
                       </div>
@@ -354,22 +354,22 @@ export function LedgerMatrix({ lpPositions, perpPositions }: LedgerMatrixProps) 
                         <span className="text-[#8B949E] text-sm">LP</span>
                         <div className="text-right">
                           <div className="font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.lpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1Exposure.lpAmount)} {token1Exposure.symbol}</div>
+                          <div className="text-xs text-[#8B949E]">{formatAmount(token1Exposure.lpAmount)}</div>
                         </div>
                       </div>
                       <div className="flex justify-between items-center">
                         <span className="text-[#8B949E] text-sm">Perp</span>
                         <div className="text-right">
                           <div className="font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.perpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1Exposure.perpAmount)} {token1Exposure.symbol}</div>
+                          <div className="text-xs text-[#8B949E]">{formatAmount(token1Exposure.perpAmount)}</div>
                         </div>
                       </div>
                       <div className="flex justify-between items-center pt-2 border-t border-[#30363D]">
                         <span className="text-[#A371F7] font-bold text-sm">Net</span>
                         <div className="text-right">
-                          <div className="font-bold text-[#E6EDF3]">{formatUsd(token1Exposure.netValue)}</div>
+                          <div className={`font-bold ${getNetColor(token1Exposure.netValue)}`}>{formatUsd(token1Exposure.netValue)}</div>
                           <div className={`text-xs font-semibold ${getNetColor(token1Exposure.netAmount)}`}>
-                            {formatAmount(token1Exposure.netAmount)} {token1Exposure.symbol}
+                            {formatAmount(token1Exposure.netAmount)}
                           </div>
                         </div>
                       </div>
