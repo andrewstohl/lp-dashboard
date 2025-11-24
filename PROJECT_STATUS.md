@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 24, 2025  
+> **Last Updated:** November 24, 2025 (Phase 1.4 Complete)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -192,6 +192,8 @@ lp-dashboard/
 | Performance Analytics | ✅ Complete | 7-day fee chart |
 | Decision Intelligence | ✅ Complete | Actionable insights |
 | Wallet Caching | ✅ Complete | Auto-loads on refresh |
+| Ledger View | ✅ Complete | Net exposure matrix |
+| Navigation | ✅ Complete | Dashboard/Ledger tabs |
 | Mobile Responsive | ✅ Complete | All components |
 
 ### Test Wallet
@@ -208,40 +210,30 @@ lp-dashboard/
 
 ## 🚧 In Progress / Next Up
 
-### Phase 1.4: Ledger View (NEXT)
-**Status:** Requirements defined, implementation pending
+### Phase 1.4: Ledger View ✅ COMPLETE
+**Status:** Implemented and deployed
 
 **Goal:** Create consolidated net exposure view showing LP + Perp positions in matrix format
 
-**Requirements:**
-- New route: `/ledger` or `/app/ledger/page.tsx`
-- Navigation link in header
-- Matrix view showing:
-  - Token balances (LP vs Perp vs Net)
-  - Fees, IL, Hedge costs
-  - Total P&L per token
-- Range visualization
-- Mobile responsive (stack vertically)
+**Completed:**
+- ✅ New route: `/app/ledger/page.tsx`
+- ✅ Navigation component with Dashboard/Ledger tabs
+- ✅ LedgerMatrix component (400 lines)
+- ✅ Token-by-token exposure breakdown (LP vs Perp vs Net)
+- ✅ Hedge ratio calculation with status badges (🟢 HEDGED, 🟡 PARTIAL, 🔴 LOW HEDGE)
+- ✅ P&L summary (fees + perp P&L)
+- ✅ Mobile responsive design
+- ✅ Unmatched perps section for standalone positions
+- ✅ Updated layout metadata to "VORA Dashboard"
 
-**Layout:**
-```
-┌─ ETH/LINK ────────────────────────────────────────┐
-│ Total: $30.4K | P&L: +$630 | Status: 🟢 HOLD      │
-│                                                    │
-│ ┌─ TOKEN LEDGER ────────────────────────────────┐ │
-│ │         ETH          LINK          TOTAL      │ │
-│ │ LP      +8.24       +1,071       +$30.4K      │ │
-│ │ Perp    -7.82       -1,071       -$29.7K      │ │
-│ │ NET     +0.42       0            +$775        │ │
-│ └───────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────┘
-```
+**Key Commits:**
+- `f042fc4` - Add Phase 1.4: Ledger View with net exposure matrix
 
 ---
 
 ## 📋 Future Phases (Backlog)
 
-### Phase 2: Enhanced Features
+### Phase 2: Enhanced Features (NEXT)
 - [ ] Section tabs (LP / Perpetuals / Combined navigation)
 - [ ] Skeleton loading screens
 - [ ] Pull-to-refresh functionality
