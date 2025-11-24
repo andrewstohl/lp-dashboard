@@ -23,6 +23,8 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379
       - DEBANK_ACCESS_KEY=${DEBANK_ACCESS_KEY}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
+      - THEGRAPH_API_KEY=${THEGRAPH_API_KEY:-}
       - KIMI_API_KEY=${KIMI_API_KEY:-}
       - LOG_LEVEL=INFO
       - ENVIRONMENT=development

@@ -6,6 +6,7 @@ import logging
 from backend.core.config import settings
 from backend.core.logging_config import setup_logging
 from backend.services.debank import close_debank_service
+from backend.services.coingecko import close_coingecko_service
 from backend.app.api.v1 import wallet
 
 # Setup logging
@@ -19,18 +20,19 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Shutting down LP Dashboard API")
     await close_debank_service()
+    await close_coingecko_service()
 
 app = FastAPI(
     title="LP Dashboard API",
     description="DeFi Liquidity Position Analytics",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan
 )
 
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4001"],  # Frontend dev server (port 4001 - confirmed free)
+    allow_origins=["http://localhost:4001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -44,7 +46,7 @@ async def root():
     return {
         "status": "operational",
         "service": "LP Dashboard API",
-        "version": "0.1.0"
+        "version": "0.2.0"
     }
 
 @app.get("/health")

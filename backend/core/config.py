@@ -5,6 +5,8 @@ class Settings(BaseSettings):
     # API Keys
     kimi_api_key: str = Field(default="", description="Kimi K2 API key")
     debank_access_key: str = Field(..., description="DeBank API access key")
+    coingecko_api_key: str = Field(default="", description="CoinGecko API key")
+    thegraph_api_key: str = Field(default="", description="The Graph API key")
 
     # URLs
     uniswap_subgraph_url: str = "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3"

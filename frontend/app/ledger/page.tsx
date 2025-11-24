@@ -1,7 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { getWalletPositions, type Position, isLPPosition, isPerpetualPosition } from "@/lib/api";
+import { 
+  getWalletLedger, 
+  type LPPosition, 
+  type PerpetualPosition,
+  type GMXRewards 
+} from "@/lib/api";
 import { Wallet, Search, RefreshCw } from "lucide-react";
 import { LedgerMatrix } from "@/components/LedgerMatrix";
 import { Navigation } from "@/components/Navigation";
@@ -14,7 +19,10 @@ export default function LedgerPage() {
     }
     return '0x23b50a703d3076b73584df48251931ebf5937ba2';
   });
-  const [positions, setPositions] = useState<Position[]>([]);
+  const [lpPositions, setLpPositions] = useState<LPPosition[]>([]);
+  const [perpPositions, setPerpPositions] = useState<PerpetualPosition[]>([]);
+  const [gmxRewards, setGmxRewards] = useState<GMXRewards | undefined>();
+  const [totalGasFees, setTotalGasFees] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
@@ -37,12 +45,16 @@ export default function LedgerPage() {
     setHasSearched(true);
 
     try {
-      const result = await getWalletPositions(walletAddress.trim());
-      setPositions(result.data.positions);
+      const result = await getWalletLedger(walletAddress.trim());
+      setLpPositions(result.data.lp_positions);
+      setPerpPositions(result.data.perp_positions);
+      setGmxRewards(result.data.gmx_rewards);
+      setTotalGasFees(result.data.total_gas_fees_usd);
       setLastUpdated(new Date());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to fetch positions");
-      setPositions([]);
+      setError(err instanceof Error ? err.message : "Failed to fetch ledger data");
+      setLpPositions([]);
+      setPerpPositions([]);
     } finally {
       setLoading(false);
     }
@@ -55,8 +67,7 @@ export default function LedgerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const lpPositions = positions.filter(isLPPosition);
-  const perpPositions = positions.filter(isPerpetualPosition);
+  const hasPositions = lpPositions.length > 0 || perpPositions.length > 0;
 
   return (
     <div className="min-h-screen bg-[#0D1117]">
@@ -66,9 +77,7 @@ export default function LedgerPage() {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
             <div className="flex items-center gap-3">
               <Wallet className="w-8 h-8 text-[#58A6FF]" />
-              <h1 className="text-2xl font-bold text-[#E6EDF3]">
-                VORA Dashboard
-              </h1>
+              <h1 className="text-2xl font-bold text-[#E6EDF3]">VORA Dashboard</h1>
             </div>
             <Navigation />
           </div>
@@ -91,11 +100,7 @@ export default function LedgerPage() {
                 disabled={loading}
                 className="px-6 py-3 bg-[#58A6FF] text-[#0D1117] font-semibold rounded-lg hover:bg-[#79B8FF] disabled:opacity-50 transition-colors flex items-center gap-2"
               >
-                {loading ? (
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Search className="w-5 h-5" />
-                )}
+                {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
                 Analyze
               </button>
             </div>
@@ -105,28 +110,19 @@ export default function LedgerPage() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Page Title */}
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-[#E6EDF3]">Net Exposure Ledger</h2>
-          <p className="text-[#8B949E]">Consolidated view of LP positions and perpetual hedges</p>
+          <h2 className="text-2xl font-bold text-[#E6EDF3]">Position & Performance Ledger</h2>
+          <p className="text-[#8B949E]">Comprehensive view of LP positions, hedges, and P&L analysis</p>
           {lastUpdated && (
-            <p className="text-xs text-[#8B949E] mt-1">
-              Last updated: {lastUpdated.toLocaleTimeString()}
-            </p>
+            <p className="text-xs text-[#8B949E] mt-1">Last updated: {lastUpdated.toLocaleTimeString()}</p>
           )}
         </div>
 
-        {/* States */}
-        {loading && <ProfessionalLoading message="Loading positions..." />}
+        {loading && <ProfessionalLoading message="Loading enriched ledger data..." />}
         
-        {error && (
-          <ProfessionalErrorState 
-            error={error} 
-            retryAction={() => handleSearch()} 
-          />
-        )}
+        {error && <ProfessionalErrorState error={error} retryAction={() => handleSearch()} />}
 
-        {!loading && !error && hasSearched && positions.length === 0 && (
+        {!loading && !error && hasSearched && !hasPositions && (
           <ProfessionalEmptyState 
             title="No Positions Found"
             message="This wallet doesn't have any LP or perpetual positions to display."
@@ -134,10 +130,12 @@ export default function LedgerPage() {
           />
         )}
 
-        {!loading && !error && positions.length > 0 && (
+        {!loading && !error && hasPositions && (
           <LedgerMatrix 
             lpPositions={lpPositions} 
-            perpPositions={perpPositions} 
+            perpPositions={perpPositions}
+            gmxRewards={gmxRewards}
+            totalGasFees={totalGasFees}
           />
         )}
       </main>

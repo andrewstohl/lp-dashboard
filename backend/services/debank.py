@@ -333,6 +333,229 @@ class DeBankService:
             logger.warning(traceback.format_exc())
             return None
 
+    async def get_transaction_history(
+        self, 
+        address: str, 
+        chain_id: str = "eth",
+        page_count: int = 20,
+        max_pages: int = 10
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch transaction history for a wallet
+        
+        Args:
+            address: Wallet address
+            chain_id: Chain to query (eth, arb, etc.)
+            page_count: Items per page (max 20)
+            max_pages: Maximum pages to fetch
+            
+        Returns:
+            List of transactions
+        """
+        all_transactions = []
+        start_time = None
+        
+        for page in range(max_pages):
+            params = {
+                "id": address.lower(),
+                "chain_id": chain_id,
+                "page_count": min(page_count, 20)
+            }
+            if start_time:
+                params["start_time"] = int(start_time)
+            
+            try:
+                response = await self.client.get("/user/history_list", params=params)
+                response.raise_for_status()
+                data = response.json()
+                
+                history = data.get("history_list", [])
+                if not history:
+                    break
+                    
+                all_transactions.extend(history)
+                start_time = history[-1].get("time_at")
+                
+            except Exception as e:
+                logger.error(f"Error fetching history page {page}: {e}")
+                break
+                
+        return all_transactions
+
+    async def get_uniswap_transactions(
+        self, 
+        address: str,
+        position_pool_address: str
+    ) -> Dict[str, Any]:
+        """
+        Get all Uniswap V3 transactions for a specific position/pool
+        
+        Returns:
+            Dict with mint_transactions, increase_transactions, 
+            decrease_transactions, collect_transactions, and gas_fees
+        """
+        transactions = await self.get_transaction_history(address, "eth")
+        
+        mint_txs = []
+        increase_txs = []
+        decrease_txs = []
+        collect_txs = []
+        total_gas_usd = 0.0
+        
+        pool_address_lower = position_pool_address.lower()
+        
+        for tx in transactions:
+            project_id = tx.get("project_id", "")
+            if project_id != "uniswap3":
+                continue
+                
+            tx_detail = tx.get("tx", {})
+            tx_name = tx_detail.get("name", "")
+            gas_usd = float(tx_detail.get("usd_gas_fee", 0))
+            
+            sends = tx.get("sends", [])
+            receives = tx.get("receives", [])
+            
+            # Check if this transaction involves our specific pool
+            # For mints/increases: tokens are SENT to the pool
+            # For decreases/collects: tokens are RECEIVED from the pool
+            involves_our_pool = False
+            
+            for send in sends:
+                if send.get("to_addr", "").lower() == pool_address_lower:
+                    involves_our_pool = True
+                    break
+            
+            if not involves_our_pool:
+                for receive in receives:
+                    if receive.get("from_addr", "").lower() == pool_address_lower:
+                        involves_our_pool = True
+                        break
+            
+            if not involves_our_pool:
+                continue
+            
+            # Extract transaction data
+            tx_data = {
+                "tx_hash": tx.get("id", ""),
+                "timestamp": tx.get("time_at", 0),
+                "tx_name": tx_name,
+                "gas_usd": gas_usd,
+                "sends": sends,
+                "receives": receives
+            }
+            
+            total_gas_usd += gas_usd
+            
+            if tx_name == "mint":
+                mint_txs.append(tx_data)
+            elif tx_name == "increaseLiquidity":
+                increase_txs.append(tx_data)
+            elif tx_name == "decreaseLiquidity":
+                decrease_txs.append(tx_data)
+            elif tx_name == "multicall" or tx_name == "collect":
+                # multicall often contains collect operations
+                if receives:
+                    collect_txs.append(tx_data)
+        
+        return {
+            "mint_transactions": mint_txs,
+            "increase_transactions": increase_txs,
+            "decrease_transactions": decrease_txs,
+            "collect_transactions": collect_txs,
+            "total_gas_usd": total_gas_usd
+        }
+
+    async def get_gmx_transactions(self, address: str) -> Dict[str, Any]:
+        """
+        Get all GMX transactions and calculate gas fees
+        
+        Returns:
+            Dict with transactions and total_gas_usd
+        """
+        transactions = await self.get_transaction_history(address, "arb")
+        
+        gmx_txs = []
+        total_gas_usd = 0.0
+        
+        for tx in transactions:
+            project_id = tx.get("project_id", "")
+            if "gmx" not in str(project_id).lower():
+                continue
+                
+            tx_detail = tx.get("tx", {})
+            gas_usd = float(tx_detail.get("usd_gas_fee", 0))
+            
+            tx_data = {
+                "tx_hash": tx.get("id", ""),
+                "timestamp": tx.get("time_at", 0),
+                "tx_name": tx_detail.get("name", ""),
+                "gas_usd": gas_usd,
+                "sends": tx.get("sends", []),
+                "receives": tx.get("receives", [])
+            }
+            
+            total_gas_usd += gas_usd
+            gmx_txs.append(tx_data)
+        
+        return {
+            "transactions": gmx_txs,
+            "total_gas_usd": total_gas_usd
+        }
+
+    async def get_gmx_rewards(self, address: str) -> Dict[str, Any]:
+        """
+        Get GMX rewards (separate from perpetual positions)
+        
+        Returns:
+            Dict with reward tokens and total value
+        """
+        try:
+            response = await self.client.get(
+                "/user/all_complex_protocol_list",
+                params={"id": address.lower()}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            for protocol in data:
+                if protocol.get("id") == "arb_gmx2":
+                    portfolio_items = protocol.get("portfolio_item_list", [])
+                    
+                    for item in portfolio_items:
+                        if item.get("name") == "Rewards":
+                            detail = item.get("detail", {})
+                            supply_tokens = detail.get("supply_token_list", [])
+                            
+                            rewards = []
+                            total_value = 0.0
+                            
+                            for token in supply_tokens:
+                                amount = float(token.get("amount", 0))
+                                price = float(token.get("price", 0))
+                                value = amount * price
+                                total_value += value
+                                
+                                rewards.append({
+                                    "symbol": token.get("symbol", ""),
+                                    "address": token.get("id", ""),
+                                    "amount": amount,
+                                    "price": price,
+                                    "value_usd": value
+                                })
+                            
+                            return {
+                                "rewards": rewards,
+                                "total_value_usd": total_value
+                            }
+            
+            return {"rewards": [], "total_value_usd": 0.0}
+            
+        except Exception as e:
+            logger.error(f"Error fetching GMX rewards: {e}")
+            return {"rewards": [], "total_value_usd": 0.0}
+
+
 # Global service instance with lifecycle management
 _debank_service: Optional[DeBankService] = None
 
