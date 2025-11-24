@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { getWalletPositions, formatCurrency, formatPercentage, formatTokenAmount, type Position, isLPPosition, isPerpetualPosition } from "@/lib/api";
 import { Wallet, TrendingUp, TrendingDown, Coins, RefreshCw, Search } from "lucide-react";
+import { Navigation } from "./Navigation";
 import { PerformanceAnalytics } from "./PerformanceAnalytics";
 import { ProfessionalLoading, ProfessionalEmptyState, ProfessionalErrorState } from "./ProfessionalStates";
 import { DecisionIntelligence } from "./DecisionIntelligence";
@@ -74,16 +75,14 @@ export default function ProfessionalDashboard() {
       {/* Header */}
       <header className="bg-[#161B22] border-b border-[#21262D] shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          <div className="text-center mb-6">
-            <div className="flex items-center justify-center gap-3 mb-2">
-              <Wallet className="w-10 h-10 text-[#58A6FF]" />
-              <h1 className="text-4xl font-bold text-[#E6EDF3]">
-                DeFi Portfolio Intelligence
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
+            <div className="flex items-center gap-3">
+              <Wallet className="w-8 h-8 text-[#58A6FF]" />
+              <h1 className="text-2xl font-bold text-[#E6EDF3]">
+                VORA Dashboard
               </h1>
             </div>
-            <p className="text-[#8B949E]">
-              Powered by DeBank API - Real DeFi Data
-            </p>
+            <Navigation />
           </div>
 
           {/* Search Form */}
