@@ -225,9 +225,14 @@ lp-dashboard/
 - ✅ Mobile responsive design
 - ✅ Unmatched perps section for standalone positions
 - ✅ Updated layout metadata to "VORA Dashboard"
+- ✅ Visual hierarchy: USD value on top (large/bold), token amount below (small/muted)
+- ✅ Removed "+" signs from positive numbers
+- ✅ Conditional coloring only on NET token amounts and TOTAL P&L
+- ✅ Per-token fee and perp P&L calculations populated
 
 **Key Commits:**
 - `f042fc4` - Add Phase 1.4: Ledger View with net exposure matrix
+- `db29f8d` - Enhanced Ledger View visuals and token-level P&L
 
 ---
 
