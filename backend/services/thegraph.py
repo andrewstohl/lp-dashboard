@@ -417,17 +417,100 @@ class TheGraphService:
         return max(1, estimated_block)
 
 
+    async def get_position_mint_values(
+        self,
+        owner_address: str,
+        pool_address: str,
+        min_block: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Get all mint transactions for an owner in a pool with their USD values at time of mint.
+        The subgraph records amountUSD at the time of each transaction.
+        
+        Args:
+            owner_address: Wallet address
+            pool_address: Pool contract address
+            min_block: Only include mints from this block onwards (for filtering to specific position)
+        
+        Returns:
+            Dict with total_usd, token0_total, token1_total, and list of mints
+        """
+        query = """
+        {
+          mints(
+            where: {origin: "%s", pool: "%s"}
+            orderBy: timestamp
+            orderDirection: asc
+            first: 100
+          ) {
+            id
+            timestamp
+            amount0
+            amount1
+            amountUSD
+            transaction {
+              blockNumber
+            }
+          }
+        }
+        """ % (owner_address.lower(), pool_address.lower())
+        
+        data = await self._query(query)
+        if not data:
+            return {"total_usd": 0, "token0_total": 0, "token1_total": 0, "mints": []}
+        
+        mints = data.get("data", {}).get("mints", [])
+        
+        total_usd = 0.0
+        token0_total = 0.0
+        token1_total = 0.0
+        mint_details = []
+        
+        for mint in mints:
+            # Filter by min_block to get only mints for this specific position
+            block = int(mint.get("transaction", {}).get("blockNumber", 0))
+            if min_block > 0 and block < min_block:
+                continue
+                
+            amount0 = float(mint.get("amount0", 0))
+            amount1 = float(mint.get("amount1", 0))
+            amount_usd = float(mint.get("amountUSD", 0))
+            
+            token0_total += amount0
+            token1_total += amount1
+            total_usd += amount_usd
+            
+            mint_details.append({
+                "timestamp": int(mint.get("timestamp", 0)),
+                "block": block,
+                "amount0": amount0,
+                "amount1": amount1,
+                "amount_usd": amount_usd
+            })
+        
+        return {
+            "total_usd": total_usd,
+            "token0_total": token0_total,
+            "token1_total": token1_total,
+            "mints": mint_details
+        }
+
     async def get_position_with_historical_values(
         self, 
         position_id: str,
-        coingecko_service=None
+        coingecko_service=None,
+        owner_address: str = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Get full position data with historical USD values for initial deposits
+        Get full position data with historical USD values for initial deposits.
+        
+        Uses the subgraph's amountUSD recorded at time of each mint transaction,
+        which is more accurate than retrospective price lookups.
         
         Args:
             position_id: The NFT position ID
-            coingecko_service: Optional CoinGecko service for historical prices
+            coingecko_service: Optional CoinGecko service (not used, kept for compatibility)
+            owner_address: Wallet address that owns the position (required for accurate values)
         """
         # Get current position data
         position = await self.get_full_position(position_id)
@@ -438,32 +521,45 @@ class TheGraphService:
         transactions = await self.get_position_transactions(position_id)
         summary = transactions.get("summary", {})
         
-        # Calculate initial deposit USD values using CoinGecko historical prices
+        # Get historical USD values from mint transactions
         initial_value0_usd = 0.0
         initial_value1_usd = 0.0
+        total_initial_usd = 0.0
+        mint_count = 0
         
-        mint_timestamp = position["position_mint_timestamp"]
-        
-        if coingecko_service and mint_timestamp > 0:
-            token0_addr = position["token0"]["address"]
-            token1_addr = position["token1"]["address"]
-            net_deposited0 = position["initial_deposits"]["token0"]["amount"]
-            net_deposited1 = position["initial_deposits"]["token1"]["amount"]
+        if owner_address and position.get("pool_address"):
+            # Get the position's creation block to filter mints
+            mint_block = summary.get("mint_block", 0)
             
-            hist_price0 = await coingecko_service.get_historical_price(token0_addr, mint_timestamp)
-            hist_price1 = await coingecko_service.get_historical_price(token1_addr, mint_timestamp)
+            mint_values = await self.get_position_mint_values(
+                owner_address, 
+                position["pool_address"],
+                min_block=mint_block
+            )
             
-            if hist_price0:
-                initial_value0_usd = net_deposited0 * hist_price0
-            if hist_price1:
-                initial_value1_usd = net_deposited1 * hist_price1
+            total_initial_usd = mint_values["total_usd"]
+            mint_count = len(mint_values["mints"])
+            
+            # Distribute USD value proportionally between tokens based on deposited amounts
+            token0_deposited = position["initial_deposits"]["token0"]["amount"]
+            token1_deposited = position["initial_deposits"]["token1"]["amount"]
+            
+            if mint_values["token0_total"] > 0 and mint_values["token1_total"] > 0:
+                # Calculate the ratio of each token's value contribution
+                # Using the subgraph totals to get proportional split
+                token0_ratio = mint_values["token0_total"] / (mint_values["token0_total"] + mint_values["token1_total"] * 200)  # rough ratio
+                
+                # Actually, better approach: use the fact that amountUSD is total for both tokens
+                # Split 50/50 as LP positions are roughly balanced at mint
+                initial_value0_usd = total_initial_usd / 2
+                initial_value1_usd = total_initial_usd / 2
         
         # Update position with historical values
         position["initial_deposits"]["token0"]["value_usd"] = initial_value0_usd
         position["initial_deposits"]["token1"]["value_usd"] = initial_value1_usd
-        position["initial_total_value_usd"] = initial_value0_usd + initial_value1_usd
+        position["initial_total_value_usd"] = total_initial_usd
         position["gas_fees_usd"] = 0.0  # Would need separate gas tracking
-        position["transaction_count"] = 1  # At minimum, the mint
+        position["transaction_count"] = max(1, mint_count)
         position["transaction_summary"] = summary
         
         return position

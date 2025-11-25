@@ -79,7 +79,8 @@ async def get_wallet_ledger(
             # Get full position data from Uniswap subgraph
             lp_subgraph = await thegraph.get_position_with_historical_values(
                 position_index, 
-                coingecko
+                coingecko,
+                owner_address=address
             )
             
             if not lp_subgraph:
