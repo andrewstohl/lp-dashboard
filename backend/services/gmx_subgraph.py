@@ -529,6 +529,158 @@ class GMXSubgraphService:
         
         return result
 
+    async def get_token_prices(self, token_addresses: List[str]) -> Dict[str, float]:
+        """
+        Get current token prices from GMX subgraph.
+        
+        GMX stores prices with (30 - tokenDecimals) precision.
+        """
+        if not token_addresses:
+            return {}
+        
+        # Build query for each token
+        query_parts = []
+        for i, addr in enumerate(token_addresses):
+            query_parts.append(f't{i}: tokenPrice(id: "{addr.lower()}") {{ minPrice maxPrice }}')
+        
+        query = "{ " + " ".join(query_parts) + " }"
+        
+        data = await self._query(query)
+        if not data or "data" not in data:
+            return {}
+        
+        prices = {}
+        for i, addr in enumerate(token_addresses):
+            token_data = data["data"].get(f"t{i}")
+            if token_data:
+                raw_price = self._safe_int(token_data.get("minPrice", 0))
+                
+                # Get token decimals to calculate price precision
+                token_info = TOKEN_INFO.get(addr.lower(), {})
+                token_decimals = token_info.get("decimals", 18)
+                
+                # Price precision = 30 - tokenDecimals
+                price_decimals = 30 - token_decimals
+                prices[addr.lower()] = raw_price / (10 ** price_decimals)
+        
+        return prices
+
+    async def get_full_positions(self, wallet_address: str) -> List[Dict[str, Any]]:
+        """
+        Get complete position data from GMX subgraph with all calculated fields.
+        
+        Returns positions in the format expected by the frontend, matching
+        the structure previously provided by DeBank.
+        """
+        # Get enriched positions (with entry price)
+        positions = await self.get_enriched_positions(wallet_address)
+        
+        if not positions:
+            return []
+        
+        # Collect all token addresses we need prices for
+        token_addresses = set()
+        for pos in positions:
+            market_addr = pos.get("market_address", "").lower()
+            market_info = MARKET_INFO.get(market_addr, {})
+            index_token = market_info.get("index_token", "")
+            
+            # Map index token name to address
+            for addr, info in TOKEN_INFO.items():
+                if info["symbol"] == index_token:
+                    token_addresses.add(addr)
+                    break
+        
+        # Add USDC for collateral pricing
+        token_addresses.add("0xaf88d065e77c8cc2239327c5edb3a432268e5831")
+        
+        # Get current prices
+        prices = await self.get_token_prices(list(token_addresses))
+        usdc_price = prices.get("0xaf88d065e77c8cc2239327c5edb3a432268e5831", 1.0)
+        
+        full_positions = []
+        for pos in positions:
+            market_addr = pos.get("market_address", "").lower()
+            market_info = MARKET_INFO.get(market_addr, {})
+            index_token_symbol = market_info.get("index_token", "")
+            
+            # Get index token address and price
+            index_token_addr = None
+            for addr, info in TOKEN_INFO.items():
+                if info["symbol"] == index_token_symbol:
+                    index_token_addr = addr
+                    break
+            
+            mark_price = prices.get(index_token_addr, 0) if index_token_addr else 0
+            entry_price = pos.get("entry_price", 0)
+            size_usd = pos.get("size_usd", 0)
+            size_tokens = pos.get("size_tokens", 0)
+            collateral_usd = pos.get("collateral_usd", 0)
+            is_short = pos.get("side") == "Short"
+            
+            # Calculate PnL
+            if entry_price > 0 and mark_price > 0 and size_tokens > 0:
+                if is_short:
+                    # Short: profit when price goes down
+                    pnl_usd = (entry_price - mark_price) * size_tokens
+                else:
+                    # Long: profit when price goes up
+                    pnl_usd = (mark_price - entry_price) * size_tokens
+            else:
+                pnl_usd = 0
+            
+            # Calculate leverage
+            leverage = size_usd / collateral_usd if collateral_usd > 0 else 0
+            
+            # Calculate liquidation price
+            # For shorts: liq_price = entry_price * (1 + 1/leverage * 0.95)
+            # For longs: liq_price = entry_price * (1 - 1/leverage * 0.95)
+            # The 0.95 accounts for ~5% buffer before liquidation
+            if leverage > 0 and entry_price > 0:
+                if is_short:
+                    liq_price = entry_price * (1 + (1 / leverage) * 0.95)
+                else:
+                    liq_price = entry_price * (1 - (1 / leverage) * 0.95)
+            else:
+                liq_price = 0
+            
+            # Net value = collateral + PnL
+            net_value_usd = collateral_usd + pnl_usd
+            
+            full_positions.append({
+                "type": "perpetual",
+                "protocol": "GMX V2",
+                "position_name": f"{pos['side']} {index_token_symbol}",
+                "chain": "arb",
+                "side": pos["side"],
+                "base_token": {
+                    "symbol": index_token_symbol,
+                    "address": index_token_addr,
+                    "price": mark_price
+                },
+                "margin_token": {
+                    "symbol": "USDC",
+                    "address": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+                    "amount": collateral_usd,  # USDC amount = USD value
+                    "price": usdc_price,
+                    "value_usd": collateral_usd * usdc_price
+                },
+                "position_size": size_tokens,
+                "position_value_usd": size_usd,
+                "entry_price": entry_price,
+                "mark_price": mark_price,
+                "liquidation_price": liq_price,
+                "leverage": leverage,
+                "pnl_usd": pnl_usd,
+                "net_value_usd": net_value_usd,
+                "position_index": pos.get("position_key", ""),
+                "initial_margin_usd": pos.get("total_collateral_deposited", collateral_usd),
+                "first_open_timestamp": pos.get("first_open_timestamp", 0),
+                "data_source": "gmx_subgraph"
+            })
+        
+        return full_positions
+
 
 # Convenience function for quick testing
 async def test_gmx_subgraph():

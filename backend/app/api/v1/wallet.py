@@ -60,15 +60,14 @@ async def get_wallet_ledger(
     - CoinGecko: Historical prices for initial deposit USD values
     """
     try:
-        # STEP 1: Use DeBank for position discovery
+        # STEP 1: Use DeBank for LP position discovery only
         positions_result = await debank.get_wallet_positions(address)
         positions = positions_result.get("positions", [])
         
-        # Separate LP and Perp positions
+        # Only need LP positions from DeBank (for discovery)
         lp_positions_debank = [p for p in positions if "pool_name" in p]
-        perp_positions = [p for p in positions if p.get("type") == "perpetual"]
         
-        # Get GMX rewards
+        # Get GMX rewards from DeBank
         gmx_rewards = await debank.get_gmx_rewards(address)
         
         # STEP 2: Enrich LP positions using Uniswap Subgraph (real-time data)
@@ -125,73 +124,30 @@ async def get_wallet_ledger(
             }
             enriched_lp_positions.append(enriched_lp)
         
-        # STEP 3: Process Perp positions with GMX Subgraph entry prices
-        # Get GMX transactions for gas
-        gmx_txs = await debank.get_gmx_transactions(address)
-        
-        # Get enriched perp data from GMX Subgraph (accurate entry prices)
-        gmx_enriched_positions = await gmx_subgraph.get_enriched_positions(address)
-        
-        # Create lookup by market address for merging
-        gmx_entry_lookup = {}
-        for gp in gmx_enriched_positions:
-            market_addr = gp.get("market_address", "").lower()
-            gmx_entry_lookup[market_addr] = {
-                "entry_price": gp.get("entry_price", 0),
-                "total_collateral_deposited": gp.get("total_collateral_deposited", 0),
-                "first_open_timestamp": gp.get("first_open_timestamp", 0),
-                "increase_count": gp.get("increase_count", 0),
-            }
+        # STEP 3: Get Perp positions directly from GMX Subgraph
+        perp_positions = await gmx_subgraph.get_full_positions(address)
         
         # Get realized P&L from GMX subgraph
         gmx_pnl = await gmx_subgraph.get_realized_pnl(address, earliest_position_mint)
         
-        # Calculate actual current margin from DeBank position snapshot
+        # Get funding info from DeBank (still useful for funding tracking)
         total_perp_margin = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
-        
-        # Get perp realized P&L since LP position was opened (still use DeBank for funding)
-        perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
+        perp_history = {"realized_pnl": 0, "current_margin": total_perp_margin, "total_funding_claimed": 0}
         if earliest_position_mint:
-            perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint, total_perp_margin)
+            debank_history = await debank.get_perp_realized_pnl(address, earliest_position_mint, total_perp_margin)
+            perp_history["total_funding_claimed"] = debank_history.get("total_funding_claimed", 0)
         
-        # Override realized P&L with more accurate GMX subgraph data
+        # Use GMX subgraph for realized P&L (more accurate)
         perp_history["realized_pnl"] = gmx_pnl.get("total_realized_pnl", 0)
         
-        enriched_perp_positions = []
+        # Allocate funding proportionally to each position
         for perp in perp_positions:
             margin_value = perp.get("margin_token", {}).get("value_usd", 0)
             proportion = margin_value / total_perp_margin if total_perp_margin > 0 else 0
-            
-            # Try to find GMX subgraph entry data by matching market
-            # DeBank provides position_index like "USDC_0x70d95587d40a2caf56bd97485ab3eec10bee6336_False"
-            position_index = perp.get("position_index", "")
-            market_addr = ""
-            if "_" in position_index:
-                parts = position_index.split("_")
-                if len(parts) >= 2:
-                    market_addr = parts[1].lower()
-            
-            gmx_data = gmx_entry_lookup.get(market_addr, {})
-            
-            # Use GMX subgraph entry price if available, otherwise fall back to DeBank
-            entry_price_from_gmx = gmx_data.get("entry_price", 0)
-            entry_price_from_debank = perp.get("entry_price", 0)
-            
-            # Allocate funding proportionally
-            funding = perp_history.get("total_funding_claimed", 0) * proportion
-            
-            enriched_perp = {
-                **perp,
-                # Override entry_price with accurate GMX subgraph data
-                "entry_price": entry_price_from_gmx if entry_price_from_gmx > 0 else entry_price_from_debank,
-                "initial_margin_usd": gmx_data.get("total_collateral_deposited", margin_value),
-                "funding_rewards_usd": funding,
-                "position_open_timestamp": gmx_data.get("first_open_timestamp", 0),
-                "increase_count": gmx_data.get("increase_count", 0),
-            }
-            enriched_perp_positions.append(enriched_perp)
+            perp["funding_rewards_usd"] = perp_history.get("total_funding_claimed", 0) * proportion
         
         # Calculate total gas fees
+        gmx_txs = await debank.get_gmx_transactions(address)
         lp_gas = sum(lp.get("gas_fees_usd", 0) for lp in enriched_lp_positions)
         gmx_gas = gmx_txs.get("total_gas_usd", 0)
         
@@ -200,7 +156,7 @@ async def get_wallet_ledger(
             "data": {
                 "wallet": address,
                 "lp_positions": enriched_lp_positions,
-                "perp_positions": enriched_perp_positions,
+                "perp_positions": perp_positions,
                 "gmx_rewards": gmx_rewards,
                 "perp_history": {
                     "realized_pnl": perp_history.get("realized_pnl", 0),
@@ -210,8 +166,8 @@ async def get_wallet_ledger(
                 "total_gas_fees_usd": lp_gas + gmx_gas,
                 "data_sources": {
                     "lp_positions": "uniswap_subgraph",
-                    "perp_positions": "debank",
-                    "historical_prices": "coingecko"
+                    "perp_positions": "gmx_subgraph",
+                    "historical_prices": "uniswap_subgraph"
                 }
             }
         }
