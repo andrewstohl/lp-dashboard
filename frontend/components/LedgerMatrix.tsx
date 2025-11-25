@@ -96,6 +96,12 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
     return "text-[#8B949E]";
   };
 
+  const getHedgeDriftColor = (hedgeDriftPercent: number): string => {
+    if (hedgeDriftPercent < 100) return "text-[#3FB950]"; // Net LONG (green)
+    if (hedgeDriftPercent > 100) return "text-[#F85149]"; // Net SHORT (red)
+    return "text-[#8B949E]"; // Perfectly hedged (gray)
+  };
+
   const getStatusBadge = (hedgeRatio: number) => {
     if (hedgeRatio >= 90 && hedgeRatio <= 110) return { text: "HEDGED", color: "bg-[#238636]/20 text-[#3FB950] border border-[#238636]/30" };
     if (hedgeRatio >= 70) return { text: "PARTIAL", color: "bg-[#9e6a03]/20 text-[#F59E0B] border border-[#9e6a03]/30" };
@@ -267,7 +273,31 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-8">
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Initial LP</div>
+                    <div className="text-sm font-medium text-[#E6EDF3]">
+                      {formatUsd(matched.totalInitialLpValue)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Current LP</div>
+                    <div className="text-sm font-medium text-[#E6EDF3]">
+                      {formatUsd(matched.totalCurrentLpValue)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">{token0.symbol} Hedge</div>
+                    <div className={`text-sm font-medium ${getHedgeDriftColor(token0.currentLpValue > 0 ? (Math.abs(token0.perpValue) / token0.currentLpValue) * 100 : 0)}`}>
+                      {token0.currentLpValue > 0 ? `${((Math.abs(token0.perpValue) / token0.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">{token1.symbol} Hedge</div>
+                    <div className={`text-sm font-medium ${getHedgeDriftColor(token1.currentLpValue > 0 ? (Math.abs(token1.perpValue) / token1.currentLpValue) * 100 : 0)}`}>
+                      {token1.currentLpValue > 0 ? `${((Math.abs(token1.perpValue) / token1.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                    </div>
+                  </div>
                   <div className="text-right">
                     <div className="text-xs text-[#8B949E] uppercase tracking-wide">Net Exposure</div>
                     <div className={`text-sm font-medium ${getColor(matched.totalNetValue)}`}>
@@ -280,9 +310,6 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                       {formatUsd(matched.grandTotalPnl)}
                     </div>
                   </div>
-                  <span className={`px-2.5 py-1 rounded text-xs font-medium ${status.color}`}>
-                    {status.text}
-                  </span>
                 </div>
               </div>
             </div>
@@ -356,18 +383,18 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                         <tr className="border-b border-[#21262d]">
                           <td className="py-3 text-[#8B949E]">Hedge Drift</td>
                           <td className="py-3 text-right">
-                            <span className={getColor(token0.currentLpValue > 0 ? (token0.perpValue / token0.currentLpValue) * 100 : 0)}>
-                              {token0.currentLpValue > 0 ? `${((token0.perpValue / token0.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                            <span className={getHedgeDriftColor(token0.currentLpValue > 0 ? (Math.abs(token0.perpValue) / token0.currentLpValue) * 100 : 0)}>
+                              {token0.currentLpValue > 0 ? `${((Math.abs(token0.perpValue) / token0.currentLpValue) * 100).toFixed(1)}%` : "—"}
                             </span>
                           </td>
                           <td className="py-3 text-right">
-                            <span className={getColor(token1.currentLpValue > 0 ? (token1.perpValue / token1.currentLpValue) * 100 : 0)}>
-                              {token1.currentLpValue > 0 ? `${((token1.perpValue / token1.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                            <span className={getHedgeDriftColor(token1.currentLpValue > 0 ? (Math.abs(token1.perpValue) / token1.currentLpValue) * 100 : 0)}>
+                              {token1.currentLpValue > 0 ? `${((Math.abs(token1.perpValue) / token1.currentLpValue) * 100).toFixed(1)}%` : "—"}
                             </span>
                           </td>
                           <td className="py-3 text-right">
-                            <span className={getColor(matched.totalCurrentLpValue > 0 ? (matched.totalPerpValue / matched.totalCurrentLpValue) * 100 : 0)}>
-                              {matched.totalCurrentLpValue > 0 ? `${((matched.totalPerpValue / matched.totalCurrentLpValue) * 100).toFixed(1)}%` : "—"}
+                            <span className={getHedgeDriftColor(matched.totalCurrentLpValue > 0 ? (Math.abs(matched.totalPerpValue) / matched.totalCurrentLpValue) * 100 : 0)}>
+                              {matched.totalCurrentLpValue > 0 ? `${((Math.abs(matched.totalPerpValue) / matched.totalCurrentLpValue) * 100).toFixed(1)}%` : "—"}
                             </span>
                           </td>
                         </tr>
