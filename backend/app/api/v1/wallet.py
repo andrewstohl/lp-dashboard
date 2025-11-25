@@ -23,7 +23,7 @@ async def get_wallet_positions(
     address: str,
     service: DeBankService = Depends(get_debank_service)
 ) -> Dict[str, Any]:
-    """Get all positions for a wallet"""
+    """Get all positions for a wallet (uses DeBank for discovery)"""
     try:
         result = await service.get_wallet_positions(address)
         return {"status": "success", "data": result}
@@ -46,139 +46,86 @@ async def get_wallet_ledger(
     thegraph: TheGraphService = Depends(get_thegraph_service)
 ) -> Dict[str, Any]:
     """
-    Get enriched ledger data for a wallet including:
-    - Current positions (LP + Perp) with VERIFIED fee tiers
-    - Initial deposit values with historical prices
-    - Transaction history filtered by position mint date
-    - GMX rewards/funding and REALIZED P&L
+    Get enriched ledger data for a wallet.
+    
+    Data Sources:
+    - DeBank: Position discovery (find position IDs) + Perp positions
+    - Uniswap Subgraph: LP position details (real-time, accurate)
+    - CoinGecko: Historical prices for initial deposit USD values
     """
     try:
-        # Get current positions
+        # STEP 1: Use DeBank for position discovery
         positions_result = await debank.get_wallet_positions(address)
         positions = positions_result.get("positions", [])
         
         # Separate LP and Perp positions
-        lp_positions = [p for p in positions if "pool_name" in p]
+        lp_positions_debank = [p for p in positions if "pool_name" in p]
         perp_positions = [p for p in positions if p.get("type") == "perpetual"]
         
         # Get GMX rewards
         gmx_rewards = await debank.get_gmx_rewards(address)
         
-        # Process each LP position
+        # STEP 2: Enrich LP positions using Uniswap Subgraph (real-time data)
         enriched_lp_positions = []
         earliest_position_mint = None
         
-        for lp in lp_positions:
-            pool_address = lp.get("pool_address", "")
-            position_index = lp.get("position_index", "")
+        for lp_debank in lp_positions_debank:
+            position_index = lp_debank.get("position_index", "")
             
-            # Get VERIFIED fee tier from The Graph
-            fee_tier = await thegraph.get_pool_fee_tier(pool_address)
-            if fee_tier is None:
-                fee_tier = 0
-                logger.warning(f"Could not get fee tier for pool {pool_address}")
+            if not position_index:
+                logger.warning(f"LP position missing position_index, skipping")
+                continue
             
-            # Get position mint timestamp
-            position_mint_timestamp = await thegraph.get_position_mint_timestamp(position_index)
-            if position_mint_timestamp is None:
-                position_mint_timestamp = 0
-                logger.warning(f"Could not get mint timestamp for position {position_index}")
+            # Get full position data from Uniswap subgraph
+            lp_subgraph = await thegraph.get_position_with_historical_values(
+                position_index, 
+                coingecko
+            )
+            
+            if not lp_subgraph:
+                logger.warning(f"Could not get subgraph data for position {position_index}")
+                continue
             
             # Track earliest position for perp history filtering
-            if position_mint_timestamp > 0:
-                if earliest_position_mint is None or position_mint_timestamp < earliest_position_mint:
-                    earliest_position_mint = position_mint_timestamp
+            mint_ts = lp_subgraph.get("position_mint_timestamp", 0)
+            if mint_ts > 0:
+                if earliest_position_mint is None or mint_ts < earliest_position_mint:
+                    earliest_position_mint = mint_ts
             
-            # Get transaction history for this LP
-            uniswap_txs = await debank.get_uniswap_transactions(address, pool_address)
+            # Get unclaimed fees from DeBank (subgraph doesn't have real-time fees)
+            unclaimed_fees_usd = lp_debank.get("unclaimed_fees_usd", 0)
+            reward_tokens = lp_debank.get("reward_tokens", [])
             
-            # Calculate NET deposits with historical prices
-            initial_deposits = {"token0": {"amount": 0, "value_usd": 0}, "token1": {"amount": 0, "value_usd": 0}}
-            
-            # Process deposits
-            all_deposit_txs = uniswap_txs["mint_transactions"] + uniswap_txs["increase_transactions"]
-            
-            for tx in all_deposit_txs:
-                timestamp = int(tx.get("timestamp", 0))
-                
-                # Only count transactions for THIS position
-                if position_mint_timestamp > 0 and timestamp < position_mint_timestamp:
-                    continue
-                
-                sends = tx.get("sends", [])
-                for send in sends:
-                    token_id = send.get("token_id", "").lower()
-                    amount = float(send.get("amount", 0))
-                    
-                    hist_price = await coingecko.get_historical_price(token_id, timestamp)
-                    
-                    if token_id == lp["token0"]["address"].lower():
-                        initial_deposits["token0"]["amount"] += amount
-                        if hist_price:
-                            initial_deposits["token0"]["value_usd"] += amount * hist_price
-                    elif token_id == lp["token1"]["address"].lower():
-                        initial_deposits["token1"]["amount"] += amount
-                        if hist_price:
-                            initial_deposits["token1"]["value_usd"] += amount * hist_price
-
-            
-            # Process withdrawals - also filter by position mint date
-            all_withdrawal_txs = uniswap_txs["decrease_transactions"] + uniswap_txs["collect_transactions"]
-            
-            for tx in all_withdrawal_txs:
-                timestamp = int(tx.get("timestamp", 0))
-                
-                if position_mint_timestamp > 0 and timestamp < position_mint_timestamp:
-                    continue
-                
-                receives = tx.get("receives", [])
-                for receive in receives:
-                    token_id = receive.get("token_id", "").lower()
-                    amount = float(receive.get("amount", 0))
-                    
-                    hist_price = await coingecko.get_historical_price(token_id, timestamp)
-                    
-                    if token_id == lp["token0"]["address"].lower():
-                        initial_deposits["token0"]["amount"] -= amount
-                        if hist_price:
-                            initial_deposits["token0"]["value_usd"] -= amount * hist_price
-                    elif token_id == lp["token1"]["address"].lower():
-                        initial_deposits["token1"]["amount"] -= amount
-                        if hist_price:
-                            initial_deposits["token1"]["value_usd"] -= amount * hist_price
-            
-            # Calculate gas fees for this position only
-            position_gas_usd = 0.0
-            position_tx_count = 0
-            for tx in all_deposit_txs + all_withdrawal_txs:
-                timestamp = int(tx.get("timestamp", 0))
-                if position_mint_timestamp > 0 and timestamp >= position_mint_timestamp:
-                    position_gas_usd += float(tx.get("gas_usd", 0))
-                    position_tx_count += 1
-            
-            # Claimed fees - not yet implemented
-            claimed_fees = {"token0": 0, "token1": 0, "total": 0}
-            
+            # Build enriched position combining subgraph + DeBank data
             enriched_lp = {
-                **lp,
-                "fee_tier": fee_tier,
-                "position_mint_timestamp": position_mint_timestamp,
-                "initial_deposits": initial_deposits,
-                "initial_total_value_usd": initial_deposits["token0"]["value_usd"] + initial_deposits["token1"]["value_usd"],
-                "claimed_fees": claimed_fees,
-                "gas_fees_usd": position_gas_usd,
-                "transaction_count": position_tx_count
+                "pool_name": lp_subgraph["pool_name"],
+                "pool_address": lp_subgraph["pool_address"],
+                "position_index": position_index,
+                "chain": lp_subgraph["chain"],
+                "fee_tier": lp_subgraph["fee_tier"],
+                "in_range": lp_subgraph["in_range"],
+                "token0": lp_subgraph["token0"],
+                "token1": lp_subgraph["token1"],
+                "total_value_usd": lp_subgraph["total_value_usd"],
+                "unclaimed_fees_usd": unclaimed_fees_usd,
+                "reward_tokens": reward_tokens,
+                "initial_deposits": lp_subgraph["initial_deposits"],
+                "initial_total_value_usd": lp_subgraph.get("initial_total_value_usd", 0),
+                "claimed_fees": lp_subgraph["collected_fees"],
+                "position_mint_timestamp": mint_ts,
+                "gas_fees_usd": lp_subgraph.get("gas_fees_usd", 0),
+                "transaction_count": lp_subgraph.get("transaction_count", 0)
             }
             enriched_lp_positions.append(enriched_lp)
         
+        # STEP 3: Process Perp positions (still using DeBank until Phase 2)
         # Get GMX transactions for gas
         gmx_txs = await debank.get_gmx_transactions(address)
         
-        # Calculate actual current margin from DeBank position snapshot (source of truth)
+        # Calculate actual current margin from DeBank position snapshot
         total_perp_margin = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
         
         # Get perp realized P&L since LP position was opened
-        # Pass actual current margin so realized P&L calculation is correct
         perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
         if earliest_position_mint:
             perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint, total_perp_margin)
@@ -189,10 +136,10 @@ async def get_wallet_ledger(
             proportion = margin_value / total_perp_margin if total_perp_margin > 0 else 0
             
             # Allocate current margin from history proportionally
-            initial_margin = perp_history["current_margin"] * proportion
+            initial_margin = perp_history.get("current_margin", 0) * proportion
             
             # Allocate funding proportionally
-            funding = perp_history["total_funding_claimed"] * proportion
+            funding = perp_history.get("total_funding_claimed", 0) * proportion
             
             enriched_perp = {
                 **perp,
@@ -200,7 +147,10 @@ async def get_wallet_ledger(
                 "funding_rewards_usd": funding
             }
             enriched_perp_positions.append(enriched_perp)
-
+        
+        # Calculate total gas fees
+        lp_gas = sum(lp.get("gas_fees_usd", 0) for lp in enriched_lp_positions)
+        gmx_gas = gmx_txs.get("total_gas_usd", 0)
         
         return {
             "status": "success",
@@ -210,11 +160,16 @@ async def get_wallet_ledger(
                 "perp_positions": enriched_perp_positions,
                 "gmx_rewards": gmx_rewards,
                 "perp_history": {
-                    "realized_pnl": perp_history["realized_pnl"],
-                    "current_margin": perp_history["current_margin"],
-                    "total_funding_claimed": perp_history["total_funding_claimed"]
+                    "realized_pnl": perp_history.get("realized_pnl", 0),
+                    "current_margin": perp_history.get("current_margin", 0),
+                    "total_funding_claimed": perp_history.get("total_funding_claimed", 0)
                 },
-                "total_gas_fees_usd": sum(lp.get("gas_fees_usd", 0) for lp in enriched_lp_positions) + gmx_txs["total_gas_usd"]
+                "total_gas_fees_usd": lp_gas + gmx_gas,
+                "data_sources": {
+                    "lp_positions": "uniswap_subgraph",
+                    "perp_positions": "debank",
+                    "historical_prices": "coingecko"
+                }
             }
         }
         
