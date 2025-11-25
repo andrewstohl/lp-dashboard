@@ -421,19 +421,23 @@ class TheGraphService:
         self,
         owner_address: str,
         pool_address: str,
-        min_block: int = 0
+        min_block: int = 0,
+        token0_address: str = None,
+        token1_address: str = None
     ) -> Dict[str, Any]:
         """
-        Get all mint transactions for an owner in a pool with their USD values at time of mint.
-        The subgraph records amountUSD at the time of each transaction.
+        Get all mint transactions for an owner in a pool with per-token USD values.
+        Calculates each token's value at the exact block of each mint using subgraph prices.
         
         Args:
             owner_address: Wallet address
             pool_address: Pool contract address
-            min_block: Only include mints from this block onwards (for filtering to specific position)
+            min_block: Only include mints from this block onwards
+            token0_address: Address of token0 for price lookups
+            token1_address: Address of token1 for price lookups
         
         Returns:
-            Dict with total_usd, token0_total, token1_total, and list of mints
+            Dict with token0_usd, token1_usd, total_usd, token amounts, and mint details
         """
         query = """
         {
@@ -457,42 +461,98 @@ class TheGraphService:
         
         data = await self._query(query)
         if not data:
-            return {"total_usd": 0, "token0_total": 0, "token1_total": 0, "mints": []}
+            return {"token0_usd": 0, "token1_usd": 0, "total_usd": 0, "token0_total": 0, "token1_total": 0, "mints": []}
         
         mints = data.get("data", {}).get("mints", [])
         
-        total_usd = 0.0
+        token0_usd_total = 0.0
+        token1_usd_total = 0.0
         token0_total = 0.0
         token1_total = 0.0
         mint_details = []
         
         for mint in mints:
-            # Filter by min_block to get only mints for this specific position
             block = int(mint.get("transaction", {}).get("blockNumber", 0))
             if min_block > 0 and block < min_block:
                 continue
                 
             amount0 = float(mint.get("amount0", 0))
             amount1 = float(mint.get("amount1", 0))
-            amount_usd = float(mint.get("amountUSD", 0))
             
             token0_total += amount0
             token1_total += amount1
-            total_usd += amount_usd
+            
+            # Get actual token prices at this specific block
+            token0_value = 0.0
+            token1_value = 0.0
+            
+            if token0_address and token1_address:
+                prices = await self._get_token_prices_at_block(
+                    token0_address, token1_address, block
+                )
+                if prices:
+                    token0_value = amount0 * prices["token0_price"]
+                    token1_value = amount1 * prices["token1_price"]
+            
+            token0_usd_total += token0_value
+            token1_usd_total += token1_value
             
             mint_details.append({
                 "timestamp": int(mint.get("timestamp", 0)),
                 "block": block,
                 "amount0": amount0,
                 "amount1": amount1,
-                "amount_usd": amount_usd
+                "token0_usd": token0_value,
+                "token1_usd": token1_value
             })
         
         return {
-            "total_usd": total_usd,
+            "token0_usd": token0_usd_total,
+            "token1_usd": token1_usd_total,
+            "total_usd": token0_usd_total + token1_usd_total,
             "token0_total": token0_total,
             "token1_total": token1_total,
             "mints": mint_details
+        }
+    
+    async def _get_token_prices_at_block(
+        self,
+        token0_address: str,
+        token1_address: str,
+        block_number: int
+    ) -> Optional[Dict[str, float]]:
+        """Get token prices in USD at a specific block."""
+        query = """
+        {
+          bundle(id: "1", block: {number: %d}) {
+            ethPriceUSD
+          }
+          token0: token(id: "%s", block: {number: %d}) {
+            derivedETH
+          }
+          token1: token(id: "%s", block: {number: %d}) {
+            derivedETH
+          }
+        }
+        """ % (block_number, token0_address.lower(), block_number, token1_address.lower(), block_number)
+        
+        data = await self._query(query)
+        if not data or "data" not in data:
+            return None
+        
+        bundle = data["data"].get("bundle", {})
+        eth_price = float(bundle.get("ethPriceUSD", 0))
+        
+        token0_data = data["data"].get("token0", {})
+        token1_data = data["data"].get("token1", {})
+        
+        token0_derived = float(token0_data.get("derivedETH", 0)) if token0_data else 0
+        token1_derived = float(token1_data.get("derivedETH", 0)) if token1_data else 0
+        
+        return {
+            "token0_price": token0_derived * eth_price,
+            "token1_price": token1_derived * eth_price,
+            "eth_price": eth_price
         }
 
     async def get_position_with_historical_values(
@@ -531,28 +591,20 @@ class TheGraphService:
             # Get the position's creation block to filter mints
             mint_block = summary.get("mint_block", 0)
             
+            # Get per-token USD values calculated at each mint's block
             mint_values = await self.get_position_mint_values(
                 owner_address, 
                 position["pool_address"],
-                min_block=mint_block
+                min_block=mint_block,
+                token0_address=position["token0"]["address"],
+                token1_address=position["token1"]["address"]
             )
             
+            # Use properly calculated per-token USD values
+            initial_value0_usd = mint_values["token0_usd"]
+            initial_value1_usd = mint_values["token1_usd"]
             total_initial_usd = mint_values["total_usd"]
             mint_count = len(mint_values["mints"])
-            
-            # Distribute USD value proportionally between tokens based on deposited amounts
-            token0_deposited = position["initial_deposits"]["token0"]["amount"]
-            token1_deposited = position["initial_deposits"]["token1"]["amount"]
-            
-            if mint_values["token0_total"] > 0 and mint_values["token1_total"] > 0:
-                # Calculate the ratio of each token's value contribution
-                # Using the subgraph totals to get proportional split
-                token0_ratio = mint_values["token0_total"] / (mint_values["token0_total"] + mint_values["token1_total"] * 200)  # rough ratio
-                
-                # Actually, better approach: use the fact that amountUSD is total for both tokens
-                # Split 50/50 as LP positions are roughly balanced at mint
-                initial_value0_usd = total_initial_usd / 2
-                initial_value1_usd = total_initial_usd / 2
         
         # Update position with historical values
         position["initial_deposits"]["token0"]["value_usd"] = initial_value0_usd
