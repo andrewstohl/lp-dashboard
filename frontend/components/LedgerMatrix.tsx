@@ -443,15 +443,15 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                         </tr>
                         <tr>
                           <td className="py-1.5 text-[#8B949E] text-xs pl-3">Unrealized P&L</td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(token0.perpUnrealizedPnl)}>{formatUsd(token0.perpUnrealizedPnl)}</span></td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(token1.perpUnrealizedPnl)}>{formatUsd(token1.perpUnrealizedPnl)}</span></td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(matched.totalPerpUnrealizedPnl)}>{formatUsd(matched.totalPerpUnrealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.perpUnrealizedPnl)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.perpUnrealizedPnl)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalPerpUnrealizedPnl)}</td>
                         </tr>
                         <tr>
                           <td className="py-1.5 text-[#8B949E] text-xs pl-3">Realized P&L</td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(token0.perpRealizedPnl)}>{formatUsd(token0.perpRealizedPnl)}</span></td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(token1.perpRealizedPnl)}>{formatUsd(token1.perpRealizedPnl)}</span></td>
-                          <td className="py-1.5 text-right text-xs"><span className={getColor(matched.totalPerpRealizedPnl)}>{formatUsd(matched.totalPerpRealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.perpRealizedPnl)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.perpRealizedPnl)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalPerpRealizedPnl)}</td>
                         </tr>
                         <tr className="border-b border-[#21262d]">
                           <td className="py-2 pl-3 text-[#E6EDF3]">Perp P&L</td>
