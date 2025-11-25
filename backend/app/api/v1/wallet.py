@@ -127,7 +127,7 @@ async def get_wallet_ledger(
         # STEP 3: Get Perp positions directly from GMX Subgraph
         perp_positions = await gmx_subgraph.get_full_positions(address)
         
-        # Get realized P&L from GMX subgraph
+        # Get realized P&L from GMX subgraph (filtered to trades after LP mint)
         gmx_pnl = await gmx_subgraph.get_realized_pnl(address, earliest_position_mint)
         
         # Get funding info from DeBank (still useful for funding tracking)
