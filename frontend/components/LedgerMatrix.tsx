@@ -279,7 +279,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                   <div>
                     <h3 className="text-lg font-bold text-[#E6EDF3]">{lpPosition.pool_name}</h3>
                     <p className="text-sm text-[#8B949E]">
-                      Uniswap V3 · {lpPosition.chain.toUpperCase()} · {lpPosition.fee_tier ? `${(lpPosition.fee_tier * 100).toFixed(2)}%` : 'Unknown'}
+                      Uniswap V3 · {lpPosition.chain.toUpperCase()} · {lpPosition.fee_tier ? `${lpPosition.fee_tier.toFixed(2)}%` : 'Unknown'}
                     </p>
                   </div>
                 </div>
