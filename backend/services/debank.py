@@ -558,13 +558,19 @@ class DeBankService:
     async def get_perp_realized_pnl(
         self,
         address: str,
-        since_timestamp: int
+        since_timestamp: int,
+        current_perp_margin: float = 0.0
     ) -> Dict[str, Any]:
         """
         Calculate realized P&L from GMX perp closes since a given timestamp.
         
-        Tracks margin deposits (SEND USDC) and position closes (RECEIVE USDC)
-        to calculate realized profits.
+        Uses actual current margin from DeBank position snapshot (passed in)
+        and transaction history to calculate realized profits.
+        
+        Args:
+            address: Wallet address
+            since_timestamp: Only consider transactions after this time
+            current_perp_margin: Actual current margin from DeBank position snapshot
         
         Returns:
             Dict with realized_pnl, current_margin, and transaction details
@@ -628,8 +634,7 @@ class DeBankService:
                             "tx_hash": tx.get("id", "")
                         })
         
-        # Calculate realized P&L
-        # Handle case where first transaction is a close from pre-existing position
+        # Calculate totals
         total_margin_sent = sum(d["amount"] for d in margin_deposits)
         total_funding = sum(f["amount"] for f in funding_claims)
         
@@ -649,21 +654,20 @@ class DeBankService:
         
         total_relevant_received = sum(c["amount"] for c in relevant_closes)
         
-        # Current margin = last deposits for currently open positions
-        current_margin = 0.0
-        if margin_deposits:
-            # Get the last two deposits (typically ETH + LINK shorts)
-            recent_deposits = sorted(margin_deposits, key=lambda x: x["timestamp"], reverse=True)[:2]
-            current_margin = sum(d["amount"] for d in recent_deposits)
+        # Use actual current margin from DeBank snapshot (source of truth)
+        # If not provided, fall back to 0 (will calculate correctly when caller provides it)
+        actual_current_margin = current_perp_margin if current_perp_margin > 0 else 0.0
         
-        # Realized P&L = relevant received - (total sent - current margin)
-        # Because current margin is still in open positions
-        closed_margin = total_margin_sent - current_margin
+        # Realized P&L = USDC received from closes - (total USDC sent - current margin still in positions)
+        # This accounts for all the margin that has been "used up" in closed positions
+        closed_margin = total_margin_sent - actual_current_margin
         realized_pnl = total_relevant_received - closed_margin
         
         return {
             "realized_pnl": realized_pnl,
-            "current_margin": current_margin,
+            "current_margin": actual_current_margin,
+            "total_margin_sent": total_margin_sent,
+            "total_received": total_relevant_received,
             "total_funding_claimed": total_funding,
             "legacy_close": legacy_close_amount,
             "margin_deposits": margin_deposits,

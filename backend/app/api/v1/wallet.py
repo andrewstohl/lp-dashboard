@@ -171,16 +171,17 @@ async def get_wallet_ledger(
             }
             enriched_lp_positions.append(enriched_lp)
         
-        # Get perp realized P&L since LP position was opened
-        perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
-        if earliest_position_mint:
-            perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint)
-        
         # Get GMX transactions for gas
         gmx_txs = await debank.get_gmx_transactions(address)
         
-        # Process perp positions
+        # Calculate actual current margin from DeBank position snapshot (source of truth)
         total_perp_margin = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
+        
+        # Get perp realized P&L since LP position was opened
+        # Pass actual current margin so realized P&L calculation is correct
+        perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
+        if earliest_position_mint:
+            perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint, total_perp_margin)
         
         enriched_perp_positions = []
         for perp in perp_positions:
