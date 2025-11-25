@@ -5,6 +5,7 @@ import os
 from backend.services.debank import get_debank_service, DeBankService
 from backend.services.coingecko import get_coingecko_service, CoinGeckoService
 from backend.services.thegraph import TheGraphService
+from backend.services.gmx_subgraph import GMXSubgraphService
 from backend.core.errors import (
     DeBankError, RateLimitError, InvalidAddressError, ServiceUnavailableError
 )
@@ -16,6 +17,10 @@ def get_thegraph_service() -> TheGraphService:
     """Dependency for The Graph service"""
     api_key = os.getenv("THEGRAPH_API_KEY", "")
     return TheGraphService(api_key)
+
+def get_gmx_subgraph_service() -> GMXSubgraphService:
+    """Dependency for GMX subgraph service"""
+    return GMXSubgraphService()
 
 
 @router.get("/wallet/{address}")
@@ -43,7 +48,8 @@ async def get_wallet_ledger(
     address: str,
     debank: DeBankService = Depends(get_debank_service),
     coingecko: CoinGeckoService = Depends(get_coingecko_service),
-    thegraph: TheGraphService = Depends(get_thegraph_service)
+    thegraph: TheGraphService = Depends(get_thegraph_service),
+    gmx_subgraph: GMXSubgraphService = Depends(get_gmx_subgraph_service)
 ) -> Dict[str, Any]:
     """
     Get enriched ledger data for a wallet.
@@ -119,33 +125,69 @@ async def get_wallet_ledger(
             }
             enriched_lp_positions.append(enriched_lp)
         
-        # STEP 3: Process Perp positions (still using DeBank until Phase 2)
+        # STEP 3: Process Perp positions with GMX Subgraph entry prices
         # Get GMX transactions for gas
         gmx_txs = await debank.get_gmx_transactions(address)
+        
+        # Get enriched perp data from GMX Subgraph (accurate entry prices)
+        gmx_enriched_positions = await gmx_subgraph.get_enriched_positions(address)
+        
+        # Create lookup by market address for merging
+        gmx_entry_lookup = {}
+        for gp in gmx_enriched_positions:
+            market_addr = gp.get("market_address", "").lower()
+            gmx_entry_lookup[market_addr] = {
+                "entry_price": gp.get("entry_price", 0),
+                "total_collateral_deposited": gp.get("total_collateral_deposited", 0),
+                "first_open_timestamp": gp.get("first_open_timestamp", 0),
+                "increase_count": gp.get("increase_count", 0),
+            }
+        
+        # Get realized P&L from GMX subgraph
+        gmx_pnl = await gmx_subgraph.get_realized_pnl(address, earliest_position_mint)
         
         # Calculate actual current margin from DeBank position snapshot
         total_perp_margin = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
         
-        # Get perp realized P&L since LP position was opened
+        # Get perp realized P&L since LP position was opened (still use DeBank for funding)
         perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
         if earliest_position_mint:
             perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint, total_perp_margin)
+        
+        # Override realized P&L with more accurate GMX subgraph data
+        perp_history["realized_pnl"] = gmx_pnl.get("total_realized_pnl", 0)
         
         enriched_perp_positions = []
         for perp in perp_positions:
             margin_value = perp.get("margin_token", {}).get("value_usd", 0)
             proportion = margin_value / total_perp_margin if total_perp_margin > 0 else 0
             
-            # Allocate current margin from history proportionally
-            initial_margin = perp_history.get("current_margin", 0) * proportion
+            # Try to find GMX subgraph entry data by matching market
+            # DeBank provides position_index like "USDC_0x70d95587d40a2caf56bd97485ab3eec10bee6336_False"
+            position_index = perp.get("position_index", "")
+            market_addr = ""
+            if "_" in position_index:
+                parts = position_index.split("_")
+                if len(parts) >= 2:
+                    market_addr = parts[1].lower()
+            
+            gmx_data = gmx_entry_lookup.get(market_addr, {})
+            
+            # Use GMX subgraph entry price if available, otherwise fall back to DeBank
+            entry_price_from_gmx = gmx_data.get("entry_price", 0)
+            entry_price_from_debank = perp.get("entry_price", 0)
             
             # Allocate funding proportionally
             funding = perp_history.get("total_funding_claimed", 0) * proportion
             
             enriched_perp = {
                 **perp,
-                "initial_margin_usd": initial_margin,
-                "funding_rewards_usd": funding
+                # Override entry_price with accurate GMX subgraph data
+                "entry_price": entry_price_from_gmx if entry_price_from_gmx > 0 else entry_price_from_debank,
+                "initial_margin_usd": gmx_data.get("total_collateral_deposited", margin_value),
+                "funding_rewards_usd": funding,
+                "position_open_timestamp": gmx_data.get("first_open_timestamp", 0),
+                "increase_count": gmx_data.get("increase_count", 0),
             }
             enriched_perp_positions.append(enriched_perp)
         
