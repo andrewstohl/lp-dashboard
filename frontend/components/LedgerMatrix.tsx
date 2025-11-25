@@ -273,39 +273,27 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                     </p>
                   </div>
                 </div>
-                <div className="flex items-center gap-6">
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Initial LP</div>
-                    <div className="text-sm font-medium text-[#E6EDF3]">
-                      {formatUsd(matched.totalInitialLpValue)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Current LP</div>
-                    <div className="text-sm font-medium text-[#E6EDF3]">
-                      {formatUsd(matched.totalCurrentLpValue)}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">{token0.symbol} Hedge</div>
+                <div className="flex items-center gap-10">
+                  <div className="text-right min-w-[100px]">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide mb-1">{token0.symbol} Hedge</div>
                     <div className={`text-sm font-medium ${getHedgeDriftColor(token0.currentLpValue > 0 ? (Math.abs(token0.perpValue) / token0.currentLpValue) * 100 : 0)}`}>
                       {token0.currentLpValue > 0 ? `${((Math.abs(token0.perpValue) / token0.currentLpValue) * 100).toFixed(1)}%` : "—"}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">{token1.symbol} Hedge</div>
+                  <div className="text-right min-w-[100px]">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide mb-1">{token1.symbol} Hedge</div>
                     <div className={`text-sm font-medium ${getHedgeDriftColor(token1.currentLpValue > 0 ? (Math.abs(token1.perpValue) / token1.currentLpValue) * 100 : 0)}`}>
                       {token1.currentLpValue > 0 ? `${((Math.abs(token1.perpValue) / token1.currentLpValue) * 100).toFixed(1)}%` : "—"}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Net Exposure</div>
+                  <div className="text-right min-w-[120px]">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide mb-1">Net Exposure</div>
                     <div className={`text-sm font-medium ${getColor(matched.totalNetValue)}`}>
                       {formatUsd(matched.totalNetValue)}
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-[#8B949E] uppercase tracking-wide">Total P&L</div>
+                  <div className="text-right min-w-[120px]">
+                    <div className="text-xs text-[#8B949E] uppercase tracking-wide mb-1">Total P&L</div>
                     <div className={`text-sm font-medium ${getColor(matched.grandTotalPnl)}`}>
                       {formatUsd(matched.grandTotalPnl)}
                     </div>
