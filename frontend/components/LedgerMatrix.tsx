@@ -332,7 +332,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                           <td className="py-3 text-right">{formatUsd(matched.totalCurrentLpValue)}</td>
                         </tr>
                         <tr className="border-b border-[#21262d]">
-                          <td className="py-3 text-[#8B949E]">Position Drift</td>
+                          <td className="py-3 text-[#8B949E]">LP Drift</td>
                           <td className="py-3 text-right">
                             <span className={getColor(token0.positionDrift)}>{token0.positionDrift > 0 ? "+" : ""}{token0.positionDrift.toFixed(1)}%</span>
                           </td>
@@ -352,6 +352,24 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                             <div className="text-xs text-[#8B949E]">{formatAmount(token1.perpAmount)}</div>
                           </td>
                           <td className="py-3 text-right">{formatUsd(matched.totalPerpValue)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-3 text-[#8B949E]">Hedge Drift</td>
+                          <td className="py-3 text-right">
+                            <span className={getColor(token0.currentLpValue > 0 ? (token0.perpValue / token0.currentLpValue) * 100 : 0)}>
+                              {token0.currentLpValue > 0 ? `${((token0.perpValue / token0.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                            </span>
+                          </td>
+                          <td className="py-3 text-right">
+                            <span className={getColor(token1.currentLpValue > 0 ? (token1.perpValue / token1.currentLpValue) * 100 : 0)}>
+                              {token1.currentLpValue > 0 ? `${((token1.perpValue / token1.currentLpValue) * 100).toFixed(1)}%` : "—"}
+                            </span>
+                          </td>
+                          <td className="py-3 text-right">
+                            <span className={getColor(matched.totalCurrentLpValue > 0 ? (matched.totalPerpValue / matched.totalCurrentLpValue) * 100 : 0)}>
+                              {matched.totalCurrentLpValue > 0 ? `${((matched.totalPerpValue / matched.totalCurrentLpValue) * 100).toFixed(1)}%` : "—"}
+                            </span>
+                          </td>
                         </tr>
                         <tr>
                           <td className="py-3 font-medium">Net Exposure</td>
