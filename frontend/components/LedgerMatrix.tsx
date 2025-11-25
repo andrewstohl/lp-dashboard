@@ -189,8 +189,8 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
       perpUnrealizedPnl: perp0Pnl,
       perpRealizedPnl: perp0RealizedPnl,
       perpFunding: perp0Funding,
-      perpSubtotal: perp0Pnl + perp0RealizedPnl + perp0Funding,
-      totalPnl: (lp.token0.value_usd - initial0Value) + claimed0 + unclaimed0 + perp0Pnl + perp0RealizedPnl + perp0Funding,
+      perpSubtotal: perp0Pnl + perp0RealizedPnl,
+      totalPnl: (lp.token0.value_usd - initial0Value) + claimed0 + unclaimed0 + perp0Pnl + perp0RealizedPnl,
     };
 
     const token1: TokenExposure = {
@@ -214,8 +214,8 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
       perpUnrealizedPnl: perp1Pnl,
       perpRealizedPnl: perp1RealizedPnl,
       perpFunding: perp1Funding,
-      perpSubtotal: perp1Pnl + perp1RealizedPnl + perp1Funding,
-      totalPnl: (lp.token1.value_usd - initial1Value) + claimed1 + unclaimed1 + perp1Pnl + perp1RealizedPnl + perp1Funding,
+      perpSubtotal: perp1Pnl + perp1RealizedPnl,
+      totalPnl: (lp.token1.value_usd - initial1Value) + claimed1 + unclaimed1 + perp1Pnl + perp1RealizedPnl,
     };
 
     // Calculate totals
@@ -224,7 +224,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
     const totalNetValue = totalCurrentValue + totalPerpValue;
     const totalPerpSubtotal = token0.perpSubtotal + token1.perpSubtotal;
     const gasFees = lp.gas_fees_usd ?? 0;
-    const grandTotal = totalLpPnl + token0.feesSubtotal + token1.feesSubtotal + totalPerpSubtotal - gasFees;
+    const grandTotal = totalLpPnl + token0.feesSubtotal + token1.feesSubtotal + totalPerpSubtotal;
     const hedgeRatio = totalCurrentValue > 0 ? (Math.abs(totalPerpValue) / totalCurrentValue) * 100 : 0;
 
     return {
@@ -477,16 +477,16 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                           <td colSpan={4} className="px-4 py-2 text-[#8B949E] font-semibold bg-[#1C2128]">PERP HEDGE</td>
                         </tr>
                         <tr className="border-b border-[#21262D]">
-                          <td className="px-4 py-2 text-[#8B949E] pl-8">Initial Margin</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token0.perpInitialMargin)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token1.perpInitialMargin)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(matched.totalPerpInitialMargin)}</td>
-                        </tr>
-                        <tr className="border-b border-[#21262D]">
                           <td className="px-4 py-2 text-[#8B949E] pl-8">Unrealized P&L</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token0.perpUnrealizedPnl)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token1.perpUnrealizedPnl)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(matched.totalPerpUnrealizedPnl)}</td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(token0.perpUnrealizedPnl)}`}>{formatUsd(token0.perpUnrealizedPnl)}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(token1.perpUnrealizedPnl)}`}>{formatUsd(token1.perpUnrealizedPnl)}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(matched.totalPerpUnrealizedPnl)}`}>{formatUsd(matched.totalPerpUnrealizedPnl)}</span>
+                          </td>
                         </tr>
                         <tr className="border-b border-[#21262D]">
                           <td className="px-4 py-2 text-[#8B949E] pl-8">Realized P&L</td>
@@ -499,12 +499,6 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                           <td className="px-4 py-2 text-right">
                             <span className={`${getColor(matched.totalPerpRealizedPnl)}`}>{formatUsd(matched.totalPerpRealizedPnl)}</span>
                           </td>
-                        </tr>
-                        <tr className="border-b border-[#21262D]">
-                          <td className="px-4 py-2 text-[#8B949E] pl-8">Funding</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token0.perpFunding)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token1.perpFunding)}</td>
-                          <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(matched.totalPerpFunding)}</td>
                         </tr>
                         <tr className="border-b border-[#21262D]">
                           <td className="px-4 py-2 text-[#E6EDF3] font-medium pl-8">Subtotal</td>
@@ -527,7 +521,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                           <td className="px-4 py-2 text-[#8B949E] pl-8">Gas Fees</td>
                           <td className="px-4 py-2 text-right text-[#8B949E]">—</td>
                           <td className="px-4 py-2 text-right text-[#8B949E]">—</td>
-                          <td className="px-4 py-2 text-right text-[#F85149]">{formatUsd(-matched.totalGasFees)}</td>
+                          <td className="px-4 py-2 text-right text-[#8B949E]">$0.00</td>
                         </tr>
 
                         {/* TOTAL P&L */}
