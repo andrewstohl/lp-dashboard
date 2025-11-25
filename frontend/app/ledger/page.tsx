@@ -5,7 +5,8 @@ import {
   getWalletLedger, 
   type LPPosition, 
   type PerpetualPosition,
-  type GMXRewards 
+  type GMXRewards,
+  type PerpHistory 
 } from "@/lib/api";
 import { Wallet, Search, RefreshCw } from "lucide-react";
 import { LedgerMatrix } from "@/components/LedgerMatrix";
@@ -22,6 +23,7 @@ export default function LedgerPage() {
   const [lpPositions, setLpPositions] = useState<LPPosition[]>([]);
   const [perpPositions, setPerpPositions] = useState<PerpetualPosition[]>([]);
   const [gmxRewards, setGmxRewards] = useState<GMXRewards | undefined>();
+  const [perpHistory, setPerpHistory] = useState<PerpHistory | undefined>();
   const [totalGasFees, setTotalGasFees] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +51,7 @@ export default function LedgerPage() {
       setLpPositions(result.data.lp_positions);
       setPerpPositions(result.data.perp_positions);
       setGmxRewards(result.data.gmx_rewards);
+      setPerpHistory(result.data.perp_history);
       setTotalGasFees(result.data.total_gas_fees_usd);
       setLastUpdated(new Date());
     } catch (err) {
@@ -135,6 +138,7 @@ export default function LedgerPage() {
             lpPositions={lpPositions} 
             perpPositions={perpPositions}
             gmxRewards={gmxRewards}
+            perpHistory={perpHistory}
             totalGasFees={totalGasFees}
           />
         )}

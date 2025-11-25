@@ -1,14 +1,21 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, List
 import logging
+import os
 from backend.services.debank import get_debank_service, DeBankService
 from backend.services.coingecko import get_coingecko_service, CoinGeckoService
+from backend.services.thegraph import TheGraphService
 from backend.core.errors import (
     DeBankError, RateLimitError, InvalidAddressError, ServiceUnavailableError
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+def get_thegraph_service() -> TheGraphService:
+    """Dependency for The Graph service"""
+    api_key = os.getenv("THEGRAPH_API_KEY", "")
+    return TheGraphService(api_key)
 
 
 @router.get("/wallet/{address}")
@@ -35,14 +42,15 @@ async def get_wallet_positions(
 async def get_wallet_ledger(
     address: str,
     debank: DeBankService = Depends(get_debank_service),
-    coingecko: CoinGeckoService = Depends(get_coingecko_service)
+    coingecko: CoinGeckoService = Depends(get_coingecko_service),
+    thegraph: TheGraphService = Depends(get_thegraph_service)
 ) -> Dict[str, Any]:
     """
     Get enriched ledger data for a wallet including:
-    - Current positions (LP + Perp)
+    - Current positions (LP + Perp) with VERIFIED fee tiers
     - Initial deposit values with historical prices
-    - Transaction history and gas fees
-    - GMX rewards/funding
+    - Transaction history filtered by position mint date
+    - GMX rewards/funding and REALIZED P&L
     """
     try:
         # Get current positions
@@ -58,28 +66,52 @@ async def get_wallet_ledger(
         
         # Process each LP position
         enriched_lp_positions = []
+        earliest_position_mint = None
+        
         for lp in lp_positions:
-            # Get transaction history for this LP
-            uniswap_txs = await debank.get_uniswap_transactions(address, lp.get("pool_address", ""))
+            pool_address = lp.get("pool_address", "")
+            position_index = lp.get("position_index", "")
             
-            # Calculate NET deposits (deposits - withdrawals) with historical prices
+            # Get VERIFIED fee tier from The Graph
+            fee_tier = await thegraph.get_pool_fee_tier(pool_address)
+            if fee_tier is None:
+                fee_tier = 0
+                logger.warning(f"Could not get fee tier for pool {pool_address}")
+            
+            # Get position mint timestamp
+            position_mint_timestamp = await thegraph.get_position_mint_timestamp(position_index)
+            if position_mint_timestamp is None:
+                position_mint_timestamp = 0
+                logger.warning(f"Could not get mint timestamp for position {position_index}")
+            
+            # Track earliest position for perp history filtering
+            if position_mint_timestamp > 0:
+                if earliest_position_mint is None or position_mint_timestamp < earliest_position_mint:
+                    earliest_position_mint = position_mint_timestamp
+            
+            # Get transaction history for this LP
+            uniswap_txs = await debank.get_uniswap_transactions(address, pool_address)
+            
+            # Calculate NET deposits with historical prices
             initial_deposits = {"token0": {"amount": 0, "value_usd": 0}, "token1": {"amount": 0, "value_usd": 0}}
             
-            # Process deposits (mint + increaseLiquidity) - these are "sends"
+            # Process deposits
             all_deposit_txs = uniswap_txs["mint_transactions"] + uniswap_txs["increase_transactions"]
             
             for tx in all_deposit_txs:
                 timestamp = int(tx.get("timestamp", 0))
-                sends = tx.get("sends", [])
                 
+                # Only count transactions for THIS position
+                if position_mint_timestamp > 0 and timestamp < position_mint_timestamp:
+                    continue
+                
+                sends = tx.get("sends", [])
                 for send in sends:
                     token_id = send.get("token_id", "").lower()
                     amount = float(send.get("amount", 0))
                     
-                    # Get historical price
                     hist_price = await coingecko.get_historical_price(token_id, timestamp)
                     
-                    # Match to token0 or token1
                     if token_id == lp["token0"]["address"].lower():
                         initial_deposits["token0"]["amount"] += amount
                         if hist_price:
@@ -88,23 +120,24 @@ async def get_wallet_ledger(
                         initial_deposits["token1"]["amount"] += amount
                         if hist_price:
                             initial_deposits["token1"]["value_usd"] += amount * hist_price
+
             
-            # Process withdrawals (decreaseLiquidity + multicall/collect) - these are "receives" from pool
-            # Multicall often combines decreaseLiquidity + collect operations
+            # Process withdrawals - also filter by position mint date
             all_withdrawal_txs = uniswap_txs["decrease_transactions"] + uniswap_txs["collect_transactions"]
             
             for tx in all_withdrawal_txs:
                 timestamp = int(tx.get("timestamp", 0))
-                receives = tx.get("receives", [])
                 
+                if position_mint_timestamp > 0 and timestamp < position_mint_timestamp:
+                    continue
+                
+                receives = tx.get("receives", [])
                 for receive in receives:
                     token_id = receive.get("token_id", "").lower()
                     amount = float(receive.get("amount", 0))
                     
-                    # Get historical price at withdrawal time
                     hist_price = await coingecko.get_historical_price(token_id, timestamp)
                     
-                    # Subtract from initial deposits
                     if token_id == lp["token0"]["address"].lower():
                         initial_deposits["token0"]["amount"] -= amount
                         if hist_price:
@@ -114,49 +147,59 @@ async def get_wallet_ledger(
                         if hist_price:
                             initial_deposits["token1"]["value_usd"] -= amount * hist_price
             
-            # Calculate claimed fees from collect transactions
+            # Calculate gas fees for this position only
+            position_gas_usd = 0.0
+            position_tx_count = 0
+            for tx in all_deposit_txs + all_withdrawal_txs:
+                timestamp = int(tx.get("timestamp", 0))
+                if position_mint_timestamp > 0 and timestamp >= position_mint_timestamp:
+                    position_gas_usd += float(tx.get("gas_usd", 0))
+                    position_tx_count += 1
+            
+            # Claimed fees - not yet implemented
             claimed_fees = {"token0": 0, "token1": 0, "total": 0}
-            for tx in uniswap_txs["collect_transactions"]:
-                receives = tx.get("receives", [])
-                for receive in receives:
-                    token_id = receive.get("token_id", "").lower()
-                    amount = float(receive.get("amount", 0))
-                    
-                    # This is a simplification - in reality we'd need to determine
-                    # if this is a fee claim vs liquidity removal
-                    # For now, we'll note that no claims have been made
-                    pass
             
             enriched_lp = {
                 **lp,
+                "fee_tier": fee_tier,
+                "position_mint_timestamp": position_mint_timestamp,
                 "initial_deposits": initial_deposits,
                 "initial_total_value_usd": initial_deposits["token0"]["value_usd"] + initial_deposits["token1"]["value_usd"],
                 "claimed_fees": claimed_fees,
-                "gas_fees_usd": uniswap_txs["total_gas_usd"],
-                "transaction_count": len(all_deposit_txs)
+                "gas_fees_usd": position_gas_usd,
+                "transaction_count": position_tx_count
             }
             enriched_lp_positions.append(enriched_lp)
         
-        # Process perp positions with GMX data
+        # Get perp realized P&L since LP position was opened
+        perp_history = {"realized_pnl": 0, "current_margin": 0, "total_funding_claimed": 0}
+        if earliest_position_mint:
+            perp_history = await debank.get_perp_realized_pnl(address, earliest_position_mint)
+        
+        # Get GMX transactions for gas
         gmx_txs = await debank.get_gmx_transactions(address)
         
-        # Allocate GMX rewards to each perp position proportionally
-        total_perp_value = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
+        # Process perp positions
+        total_perp_margin = sum(p.get("margin_token", {}).get("value_usd", 0) for p in perp_positions)
         
         enriched_perp_positions = []
         for perp in perp_positions:
-            perp_value = perp.get("margin_token", {}).get("value_usd", 0)
-            proportion = perp_value / total_perp_value if total_perp_value > 0 else 0
+            margin_value = perp.get("margin_token", {}).get("value_usd", 0)
+            proportion = margin_value / total_perp_margin if total_perp_margin > 0 else 0
             
-            # Allocate rewards proportionally
-            allocated_rewards = gmx_rewards["total_value_usd"] * proportion
+            # Allocate current margin from history proportionally
+            initial_margin = perp_history["current_margin"] * proportion
+            
+            # Allocate funding proportionally
+            funding = perp_history["total_funding_claimed"] * proportion
             
             enriched_perp = {
                 **perp,
-                "initial_margin_usd": perp.get("margin_token", {}).get("value_usd", 0),
-                "funding_rewards_usd": allocated_rewards
+                "initial_margin_usd": initial_margin,
+                "funding_rewards_usd": funding
             }
             enriched_perp_positions.append(enriched_perp)
+
         
         return {
             "status": "success",
@@ -165,6 +208,11 @@ async def get_wallet_ledger(
                 "lp_positions": enriched_lp_positions,
                 "perp_positions": enriched_perp_positions,
                 "gmx_rewards": gmx_rewards,
+                "perp_history": {
+                    "realized_pnl": perp_history["realized_pnl"],
+                    "current_margin": perp_history["current_margin"],
+                    "total_funding_claimed": perp_history["total_funding_claimed"]
+                },
                 "total_gas_fees_usd": sum(lp.get("gas_fees_usd", 0) for lp in enriched_lp_positions) + gmx_txs["total_gas_usd"]
             }
         }

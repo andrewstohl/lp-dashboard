@@ -555,6 +555,122 @@ class DeBankService:
             logger.error(f"Error fetching GMX rewards: {e}")
             return {"rewards": [], "total_value_usd": 0.0}
 
+    async def get_perp_realized_pnl(
+        self,
+        address: str,
+        since_timestamp: int
+    ) -> Dict[str, Any]:
+        """
+        Calculate realized P&L from GMX perp closes since a given timestamp.
+        
+        Tracks margin deposits (SEND USDC) and position closes (RECEIVE USDC)
+        to calculate realized profits.
+        
+        Returns:
+            Dict with realized_pnl, current_margin, and transaction details
+        """
+        USDC_ADDRESS = "0xaf88d065e77c8cc2239327c5edb3a432268e5831"
+        
+        transactions = await self.get_transaction_history(address, "arb")
+        
+        # Filter GMX transactions since the timestamp
+        gmx_txs = []
+        for tx in transactions:
+            project_id = tx.get("project_id", "") or ""
+            timestamp = int(tx.get("time_at", 0))
+            
+            if timestamp < since_timestamp:
+                continue
+            
+            if "gmx" in project_id.lower():
+                gmx_txs.append(tx)
+        
+        # Sort by timestamp
+        gmx_txs.sort(key=lambda x: x.get("time_at", 0))
+        
+        # Track margin and closes
+        margin_deposits = []  # List of (timestamp, amount)
+        position_closes = []  # List of (timestamp, amount)
+        funding_claims = []  # Funding fees claimed
+        
+        for tx in gmx_txs:
+            timestamp = int(tx.get("time_at", 0))
+            tx_name = tx.get("tx", {}).get("name", "").lower()
+            
+            sends = tx.get("sends", [])
+            receives = tx.get("receives", [])
+            
+            for send in sends:
+                token_id = send.get("token_id", "").lower()
+                amount = float(send.get("amount", 0))
+                
+                if token_id == USDC_ADDRESS and amount > 1:
+                    margin_deposits.append({
+                        "timestamp": timestamp,
+                        "amount": amount,
+                        "tx_hash": tx.get("id", "")
+                    })
+            
+            for receive in receives:
+                token_id = receive.get("token_id", "").lower()
+                amount = float(receive.get("amount", 0))
+                
+                if token_id == USDC_ADDRESS and amount > 1:
+                    if tx_name == "claimfundingfees":
+                        funding_claims.append({
+                            "timestamp": timestamp,
+                            "amount": amount
+                        })
+                    else:
+                        position_closes.append({
+                            "timestamp": timestamp,
+                            "amount": amount,
+                            "tx_hash": tx.get("id", "")
+                        })
+        
+        # Calculate realized P&L
+        # Handle case where first transaction is a close from pre-existing position
+        total_margin_sent = sum(d["amount"] for d in margin_deposits)
+        total_funding = sum(f["amount"] for f in funding_claims)
+        
+        # Check if first close happened before first margin deposit
+        # If so, it's from a pre-existing position and should be excluded
+        first_deposit_time = min((d["timestamp"] for d in margin_deposits), default=float('inf'))
+        
+        relevant_closes = []
+        legacy_close_amount = 0.0
+        for close in position_closes:
+            if close["timestamp"] < first_deposit_time:
+                # This close is from a pre-existing position
+                legacy_close_amount += close["amount"]
+                logger.debug(f"Excluding legacy close: ${close['amount']:.2f}")
+            else:
+                relevant_closes.append(close)
+        
+        total_relevant_received = sum(c["amount"] for c in relevant_closes)
+        
+        # Current margin = last deposits for currently open positions
+        current_margin = 0.0
+        if margin_deposits:
+            # Get the last two deposits (typically ETH + LINK shorts)
+            recent_deposits = sorted(margin_deposits, key=lambda x: x["timestamp"], reverse=True)[:2]
+            current_margin = sum(d["amount"] for d in recent_deposits)
+        
+        # Realized P&L = relevant received - (total sent - current margin)
+        # Because current margin is still in open positions
+        closed_margin = total_margin_sent - current_margin
+        realized_pnl = total_relevant_received - closed_margin
+        
+        return {
+            "realized_pnl": realized_pnl,
+            "current_margin": current_margin,
+            "total_funding_claimed": total_funding,
+            "legacy_close": legacy_close_amount,
+            "margin_deposits": margin_deposits,
+            "position_closes": position_closes,
+            "funding_claims": funding_claims
+        }
+
 
 # Global service instance with lifecycle management
 _debank_service: Optional[DeBankService] = None

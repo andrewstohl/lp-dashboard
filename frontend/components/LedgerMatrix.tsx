@@ -6,6 +6,7 @@ import {
   type LPPosition, 
   type PerpetualPosition, 
   type GMXRewards,
+  type PerpHistory,
   formatCurrency, 
   formatCompactCurrency 
 } from "@/lib/api";
@@ -14,6 +15,7 @@ interface LedgerMatrixProps {
   lpPositions: LPPosition[];
   perpPositions: PerpetualPosition[];
   gmxRewards?: GMXRewards;
+  perpHistory?: PerpHistory;
   totalGasFees?: number;
 }
 
@@ -38,6 +40,7 @@ interface TokenExposure {
   feesSubtotal: number;
   perpInitialMargin: number;
   perpUnrealizedPnl: number;
+  perpRealizedPnl: number;
   perpFunding: number;
   perpSubtotal: number;
   totalPnl: number;
@@ -59,6 +62,7 @@ interface MatchedPosition {
   totalFeesSubtotal: number;
   totalPerpInitialMargin: number;
   totalPerpUnrealizedPnl: number;
+  totalPerpRealizedPnl: number;
   totalPerpFunding: number;
   totalPerpSubtotal: number;
   totalGasFees: number;
@@ -66,7 +70,7 @@ interface MatchedPosition {
   hedgeRatio: number;
 }
 
-export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasFees = 0 }: LedgerMatrixProps) {
+export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHistory, totalGasFees = 0 }: LedgerMatrixProps) {
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
 
   const toggleExpanded = (index: number) => {
@@ -156,6 +160,12 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
     const perp1Margin = token1Perp?.initial_margin_usd ?? token1Perp?.margin_token?.value_usd ?? 0;
     const perp0Funding = token0Perp?.funding_rewards_usd ?? 0;
     const perp1Funding = token1Perp?.funding_rewards_usd ?? 0;
+    
+    // Allocate realized P&L proportionally based on margin values
+    const totalMargin = perp0Margin + perp1Margin;
+    const realizedPnl = perpHistory?.realized_pnl ?? 0;
+    const perp0RealizedPnl = totalMargin > 0 ? realizedPnl * (perp0Margin / totalMargin) : 0;
+    const perp1RealizedPnl = totalMargin > 0 ? realizedPnl * (perp1Margin / totalMargin) : 0;
 
     // Build token exposures
     const token0: TokenExposure = {
@@ -177,9 +187,10 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
       feesSubtotal: claimed0 + unclaimed0,
       perpInitialMargin: perp0Margin,
       perpUnrealizedPnl: perp0Pnl,
+      perpRealizedPnl: perp0RealizedPnl,
       perpFunding: perp0Funding,
-      perpSubtotal: perp0Pnl + perp0Funding,
-      totalPnl: (lp.token0.value_usd - initial0Value) + claimed0 + unclaimed0 + perp0Pnl + perp0Funding,
+      perpSubtotal: perp0Pnl + perp0RealizedPnl + perp0Funding,
+      totalPnl: (lp.token0.value_usd - initial0Value) + claimed0 + unclaimed0 + perp0Pnl + perp0RealizedPnl + perp0Funding,
     };
 
     const token1: TokenExposure = {
@@ -201,9 +212,10 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
       feesSubtotal: claimed1 + unclaimed1,
       perpInitialMargin: perp1Margin,
       perpUnrealizedPnl: perp1Pnl,
+      perpRealizedPnl: perp1RealizedPnl,
       perpFunding: perp1Funding,
-      perpSubtotal: perp1Pnl + perp1Funding,
-      totalPnl: (lp.token1.value_usd - initial1Value) + claimed1 + unclaimed1 + perp1Pnl + perp1Funding,
+      perpSubtotal: perp1Pnl + perp1RealizedPnl + perp1Funding,
+      totalPnl: (lp.token1.value_usd - initial1Value) + claimed1 + unclaimed1 + perp1Pnl + perp1RealizedPnl + perp1Funding,
     };
 
     // Calculate totals
@@ -230,6 +242,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
       totalFeesSubtotal: token0.feesSubtotal + token1.feesSubtotal,
       totalPerpInitialMargin: perp0Margin + perp1Margin,
       totalPerpUnrealizedPnl: perp0Pnl + perp1Pnl,
+      totalPerpRealizedPnl: perp0RealizedPnl + perp1RealizedPnl,
       totalPerpFunding: perp0Funding + perp1Funding,
       totalPerpSubtotal,
       totalGasFees: gasFees,
@@ -266,7 +279,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
                   <div>
                     <h3 className="text-lg font-bold text-[#E6EDF3]">{lpPosition.pool_name}</h3>
                     <p className="text-sm text-[#8B949E]">
-                      Uniswap V3 · {lpPosition.chain.toUpperCase()} · 0.30%
+                      Uniswap V3 · {lpPosition.chain.toUpperCase()} · {lpPosition.fee_tier ? `${(lpPosition.fee_tier * 100).toFixed(2)}%` : 'Unknown'}
                     </p>
                   </div>
                 </div>
@@ -474,6 +487,18 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, totalGasF
                           <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token0.perpUnrealizedPnl)}</td>
                           <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(token1.perpUnrealizedPnl)}</td>
                           <td className="px-4 py-2 text-right text-[#E6EDF3]">{formatUsd(matched.totalPerpUnrealizedPnl)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262D]">
+                          <td className="px-4 py-2 text-[#8B949E] pl-8">Realized P&L</td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(token0.perpRealizedPnl)}`}>{formatUsd(token0.perpRealizedPnl)}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(token1.perpRealizedPnl)}`}>{formatUsd(token1.perpRealizedPnl)}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right">
+                            <span className={`${getColor(matched.totalPerpRealizedPnl)}`}>{formatUsd(matched.totalPerpRealizedPnl)}</span>
+                          </td>
                         </tr>
                         <tr className="border-b border-[#21262D]">
                           <td className="px-4 py-2 text-[#8B949E] pl-8">Funding</td>
