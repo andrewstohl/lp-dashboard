@@ -289,186 +289,217 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
 
             {/* Expanded Content */}
             {isExpanded && (
-              <div className="bg-[#161B22]">
-                {/* POSITION ANALYSIS */}
-                <div className="p-5">
-                  <h4 className="text-xs font-semibold text-[#8B949E] uppercase tracking-wider mb-4">Position Analysis</h4>
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-[#30363d]">
-                        <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-[#E6EDF3]">
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-3 text-[#8B949E]">Initial LP</td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token0.initialLpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0.initialLpAmount)} ({token0.initialLpPercent.toFixed(0)}%)</div>
-                        </td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token1.initialLpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1.initialLpAmount)} ({token1.initialLpPercent.toFixed(0)}%)</div>
-                        </td>
-                        <td className="py-3 text-right">{formatUsd(matched.totalInitialLpValue)}</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-3 text-[#8B949E]">Current LP</td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token0.currentLpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0.currentLpAmount)} ({token0.currentLpPercent.toFixed(0)}%)</div>
-                        </td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token1.currentLpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1.currentLpAmount)} ({token1.currentLpPercent.toFixed(0)}%)</div>
-                        </td>
-                        <td className="py-3 text-right">{formatUsd(matched.totalCurrentLpValue)}</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-3 text-[#8B949E]">Position Drift</td>
-                        <td className="py-3 text-right">
-                          <span className={getColor(token0.positionDrift)}>{token0.positionDrift > 0 ? "+" : ""}{token0.positionDrift.toFixed(1)}%</span>
-                        </td>
-                        <td className="py-3 text-right">
-                          <span className={getColor(token1.positionDrift)}>{token1.positionDrift > 0 ? "+" : ""}{token1.positionDrift.toFixed(1)}%</span>
-                        </td>
-                        <td className="py-3 text-right text-[#8B949E]">—</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-3 text-[#8B949E]">Perp Hedge</td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token0.perpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0.perpAmount)}</div>
-                        </td>
-                        <td className="py-3 text-right">
-                          <div>{formatUsd(token1.perpValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1.perpAmount)}</div>
-                        </td>
-                        <td className="py-3 text-right">{formatUsd(matched.totalPerpValue)}</td>
-                      </tr>
-                      <tr>
-                        <td className="py-3 font-medium">Net Exposure</td>
-                        <td className="py-3 text-right">
-                          <div className={`font-medium ${getColor(token0.netValue)}`}>{formatUsd(token0.netValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token0.netAmount)}</div>
-                        </td>
-                        <td className="py-3 text-right">
-                          <div className={`font-medium ${getColor(token1.netValue)}`}>{formatUsd(token1.netValue)}</div>
-                          <div className="text-xs text-[#8B949E]">{formatAmount(token1.netAmount)}</div>
-                        </td>
-                        <td className="py-3 text-right">
-                          <span className={`font-medium ${getColor(matched.totalNetValue)}`}>{formatUsd(matched.totalNetValue)}</span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
+              <div className="bg-[#0D1117]">
+                {/* POSITION ANALYSIS - Separate Card */}
+                <div className="m-4 bg-[#161B22] rounded-lg border border-[#30363d]">
+                  <div className="px-4 py-3 border-b border-[#30363d]">
+                    <h4 className="text-sm font-semibold text-[#E6EDF3]">Position Analysis</h4>
+                    <p className="text-xs text-[#8B949E] mt-0.5">Current exposure and hedge status</p>
+                  </div>
+                  <div className="p-4">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-[#30363d]">
+                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-[#E6EDF3]">
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-3 text-[#8B949E]">Initial LP</td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token0.initialLpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token0.initialLpAmount)} ({token0.initialLpPercent.toFixed(0)}%)</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token1.initialLpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token1.initialLpAmount)} ({token1.initialLpPercent.toFixed(0)}%)</div>
+                          </td>
+                          <td className="py-3 text-right">{formatUsd(matched.totalInitialLpValue)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-3 text-[#8B949E]">Current LP</td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token0.currentLpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token0.currentLpAmount)} ({token0.currentLpPercent.toFixed(0)}%)</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token1.currentLpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token1.currentLpAmount)} ({token1.currentLpPercent.toFixed(0)}%)</div>
+                          </td>
+                          <td className="py-3 text-right">{formatUsd(matched.totalCurrentLpValue)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-3 text-[#8B949E]">Position Drift</td>
+                          <td className="py-3 text-right">
+                            <span className={getColor(token0.positionDrift)}>{token0.positionDrift > 0 ? "+" : ""}{token0.positionDrift.toFixed(1)}%</span>
+                          </td>
+                          <td className="py-3 text-right">
+                            <span className={getColor(token1.positionDrift)}>{token1.positionDrift > 0 ? "+" : ""}{token1.positionDrift.toFixed(1)}%</span>
+                          </td>
+                          <td className="py-3 text-right text-[#8B949E]">—</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-3 text-[#8B949E]">Perp Hedge</td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token0.perpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token0.perpAmount)}</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token1.perpValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token1.perpAmount)}</div>
+                          </td>
+                          <td className="py-3 text-right">{formatUsd(matched.totalPerpValue)}</td>
+                        </tr>
+                        <tr>
+                          <td className="py-3 font-medium">Net Exposure</td>
+                          <td className="py-3 text-right">
+                            <div className={`font-medium ${getColor(token0.netValue)}`}>{formatUsd(token0.netValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token0.netAmount)}</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div className={`font-medium ${getColor(token1.netValue)}`}>{formatUsd(token1.netValue)}</div>
+                            <div className="text-xs text-[#8B949E]">{formatAmount(token1.netAmount)}</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <span className={`font-medium ${getColor(matched.totalNetValue)}`}>{formatUsd(matched.totalNetValue)}</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
 
-                {/* PERFORMANCE ANALYSIS */}
-                <div className="p-5 border-t border-[#30363d]">
-                  <h4 className="text-xs font-semibold text-[#8B949E] uppercase tracking-wider mb-4">Performance Analysis</h4>
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-[#30363d]">
-                        <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
-                        <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody className="text-[#E6EDF3]">
-                      {/* LP POSITION */}
-                      <tr className="border-b border-[#30363d]">
-                        <td colSpan={4} className="py-2 text-xs font-semibold text-[#58A6FF] uppercase tracking-wide">LP Position</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Initial Value</td>
-                        <td className="py-2.5 text-right">{formatUsd(token0.initialLpValue)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(token1.initialLpValue)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(matched.totalInitialLpValue)}</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Current Value</td>
-                        <td className="py-2.5 text-right">{formatUsd(token0.currentLpValue)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(token1.currentLpValue)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(matched.totalCurrentLpValue)}</td>
-                      </tr>
-                      <tr className="border-b border-[#30363d]">
-                        <td className="py-2.5 pl-3 font-medium">Subtotal</td>
-                        <td className="py-2.5 text-right"><span className={getColor(token0.lpPnl)}>{formatUsd(token0.lpPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(token1.lpPnl)}>{formatUsd(token1.lpPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={`font-medium ${getColor(matched.totalLpPnl)}`}>{formatUsd(matched.totalLpPnl)}</span></td>
-                      </tr>
+                {/* PERFORMANCE ANALYSIS - Separate Card */}
+                <div className="m-4 mt-0 bg-[#161B22] rounded-lg border border-[#30363d]">
+                  <div className="px-4 py-3 border-b border-[#30363d]">
+                    <h4 className="text-sm font-semibold text-[#E6EDF3]">Performance Analysis</h4>
+                    <p className="text-xs text-[#8B949E] mt-0.5">P&L breakdown by component</p>
+                  </div>
+                  
+                  {/* Detailed breakdown */}
+                  <div className="p-4 border-b border-[#30363d]">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-[#30363d]">
+                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-40"></th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
+                          <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="text-[#E6EDF3]">
+                        {/* LP POSITION */}
+                        <tr>
+                          <td colSpan={4} className="pt-2 pb-1 text-xs font-semibold text-[#58A6FF]">LP Position</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Initial Value</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.initialLpValue)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.initialLpValue)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalInitialLpValue)}</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Current Value</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.currentLpValue)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.currentLpValue)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalCurrentLpValue)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-2 pl-3 text-[#E6EDF3]">LP P&L</td>
+                          <td className="py-2 text-right"><span className={getColor(token0.lpPnl)}>{formatUsd(token0.lpPnl)}</span></td>
+                          <td className="py-2 text-right"><span className={getColor(token1.lpPnl)}>{formatUsd(token1.lpPnl)}</span></td>
+                          <td className="py-2 text-right"><span className={`font-medium ${getColor(matched.totalLpPnl)}`}>{formatUsd(matched.totalLpPnl)}</span></td>
+                        </tr>
 
-                      {/* LP FEES */}
-                      <tr className="border-b border-[#30363d]">
-                        <td colSpan={4} className="py-2 text-xs font-semibold text-[#58A6FF] uppercase tracking-wide">LP Fees</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Claimed</td>
-                        <td className="py-2.5 text-right">{formatUsd(token0.claimedFees)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(token1.claimedFees)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(matched.totalClaimedFees)}</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Unclaimed</td>
-                        <td className="py-2.5 text-right">{formatUsd(token0.unclaimedFees)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(token1.unclaimedFees)}</td>
-                        <td className="py-2.5 text-right">{formatUsd(matched.totalUnclaimedFees)}</td>
-                      </tr>
-                      <tr className="border-b border-[#30363d]">
-                        <td className="py-2.5 pl-3 font-medium">Subtotal</td>
-                        <td className="py-2.5 text-right"><span className={getColor(token0.feesSubtotal)}>{formatUsd(token0.feesSubtotal)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(token1.feesSubtotal)}>{formatUsd(token1.feesSubtotal)}</span></td>
-                        <td className="py-2.5 text-right"><span className={`font-medium ${getColor(matched.totalFeesSubtotal)}`}>{formatUsd(matched.totalFeesSubtotal)}</span></td>
-                      </tr>
+                        {/* LP FEES */}
+                        <tr>
+                          <td colSpan={4} className="pt-3 pb-1 text-xs font-semibold text-[#58A6FF]">LP Fees</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Claimed</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.claimedFees)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.claimedFees)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalClaimedFees)}</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Unclaimed</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token0.unclaimedFees)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(token1.unclaimedFees)}</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">{formatUsd(matched.totalUnclaimedFees)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-2 pl-3 text-[#E6EDF3]">Fees Total</td>
+                          <td className="py-2 text-right"><span className={getColor(token0.feesSubtotal)}>{formatUsd(token0.feesSubtotal)}</span></td>
+                          <td className="py-2 text-right"><span className={getColor(token1.feesSubtotal)}>{formatUsd(token1.feesSubtotal)}</span></td>
+                          <td className="py-2 text-right"><span className={`font-medium ${getColor(matched.totalFeesSubtotal)}`}>{formatUsd(matched.totalFeesSubtotal)}</span></td>
+                        </tr>
 
-                      {/* PERP HEDGE */}
-                      <tr className="border-b border-[#30363d]">
-                        <td colSpan={4} className="py-2 text-xs font-semibold text-[#58A6FF] uppercase tracking-wide">Perp Hedge</td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Unrealized P&L</td>
-                        <td className="py-2.5 text-right"><span className={getColor(token0.perpUnrealizedPnl)}>{formatUsd(token0.perpUnrealizedPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(token1.perpUnrealizedPnl)}>{formatUsd(token1.perpUnrealizedPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(matched.totalPerpUnrealizedPnl)}>{formatUsd(matched.totalPerpUnrealizedPnl)}</span></td>
-                      </tr>
-                      <tr className="border-b border-[#21262d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Realized P&L</td>
-                        <td className="py-2.5 text-right"><span className={getColor(token0.perpRealizedPnl)}>{formatUsd(token0.perpRealizedPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(token1.perpRealizedPnl)}>{formatUsd(token1.perpRealizedPnl)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(matched.totalPerpRealizedPnl)}>{formatUsd(matched.totalPerpRealizedPnl)}</span></td>
-                      </tr>
-                      <tr className="border-b border-[#30363d]">
-                        <td className="py-2.5 pl-3 font-medium">Subtotal</td>
-                        <td className="py-2.5 text-right"><span className={getColor(token0.perpSubtotal)}>{formatUsd(token0.perpSubtotal)}</span></td>
-                        <td className="py-2.5 text-right"><span className={getColor(token1.perpSubtotal)}>{formatUsd(token1.perpSubtotal)}</span></td>
-                        <td className="py-2.5 text-right"><span className={`font-medium ${getColor(matched.totalPerpSubtotal)}`}>{formatUsd(matched.totalPerpSubtotal)}</span></td>
-                      </tr>
+                        {/* PERP HEDGE */}
+                        <tr>
+                          <td colSpan={4} className="pt-3 pb-1 text-xs font-semibold text-[#58A6FF]">Perp Hedge</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Unrealized P&L</td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(token0.perpUnrealizedPnl)}>{formatUsd(token0.perpUnrealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(token1.perpUnrealizedPnl)}>{formatUsd(token1.perpUnrealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(matched.totalPerpUnrealizedPnl)}>{formatUsd(matched.totalPerpUnrealizedPnl)}</span></td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Realized P&L</td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(token0.perpRealizedPnl)}>{formatUsd(token0.perpRealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(token1.perpRealizedPnl)}>{formatUsd(token1.perpRealizedPnl)}</span></td>
+                          <td className="py-1.5 text-right text-xs"><span className={getColor(matched.totalPerpRealizedPnl)}>{formatUsd(matched.totalPerpRealizedPnl)}</span></td>
+                        </tr>
+                        <tr className="border-b border-[#21262d]">
+                          <td className="py-2 pl-3 text-[#E6EDF3]">Perp P&L</td>
+                          <td className="py-2 text-right"><span className={getColor(token0.perpSubtotal)}>{formatUsd(token0.perpSubtotal)}</span></td>
+                          <td className="py-2 text-right"><span className={getColor(token1.perpSubtotal)}>{formatUsd(token1.perpSubtotal)}</span></td>
+                          <td className="py-2 text-right"><span className={`font-medium ${getColor(matched.totalPerpSubtotal)}`}>{formatUsd(matched.totalPerpSubtotal)}</span></td>
+                        </tr>
 
-                      {/* COSTS */}
-                      <tr className="border-b border-[#30363d]">
-                        <td colSpan={4} className="py-2 text-xs font-semibold text-[#58A6FF] uppercase tracking-wide">Costs</td>
-                      </tr>
-                      <tr className="border-b border-[#30363d]">
-                        <td className="py-2.5 text-[#8B949E] pl-3">Gas Fees</td>
-                        <td className="py-2.5 text-right text-[#8B949E]">—</td>
-                        <td className="py-2.5 text-right text-[#8B949E]">—</td>
-                        <td className="py-2.5 text-right text-[#8B949E]">$0.00</td>
-                      </tr>
+                        {/* COSTS */}
+                        <tr>
+                          <td colSpan={4} className="pt-3 pb-1 text-xs font-semibold text-[#58A6FF]">Costs</td>
+                        </tr>
+                        <tr>
+                          <td className="py-1.5 text-[#8B949E] text-xs pl-3">Gas Fees</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">—</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">—</td>
+                          <td className="py-1.5 text-right text-xs text-[#8B949E]">$0.00</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
 
-                      {/* TOTAL P&L */}
-                      <tr>
-                        <td className="py-4 font-semibold text-[#E6EDF3]">Total P&L</td>
-                        <td className="py-4 text-right"><span className={`font-semibold ${getColor(token0.totalPnl)}`}>{formatUsd(token0.totalPnl)}</span></td>
-                        <td className="py-4 text-right"><span className={`font-semibold ${getColor(token1.totalPnl)}`}>{formatUsd(token1.totalPnl)}</span></td>
-                        <td className="py-4 text-right"><span className={`text-lg font-bold ${getColor(matched.grandTotalPnl)}`}>{formatUsd(matched.grandTotalPnl)}</span></td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  {/* P&L Summary - Shows the build-up clearly */}
+                  <div className="p-4 bg-[#0D1117]">
+                    <div className="text-xs font-semibold text-[#8B949E] uppercase tracking-wide mb-3">P&L Summary</div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-[#8B949E]">LP Position P&L</span>
+                        <span className={getColor(matched.totalLpPnl)}>{formatUsd(matched.totalLpPnl)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-[#8B949E]">+ Fees Earned</span>
+                        <span className={getColor(matched.totalFeesSubtotal)}>{formatUsd(matched.totalFeesSubtotal)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-[#8B949E]">+ Perp Hedge P&L</span>
+                        <span className={getColor(matched.totalPerpSubtotal)}>{formatUsd(matched.totalPerpSubtotal)}</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm">
+                        <span className="text-[#8B949E]">− Gas Costs</span>
+                        <span className="text-[#8B949E]">$0.00</span>
+                      </div>
+                      <div className="border-t border-[#30363d] pt-3 mt-3 flex justify-between items-center">
+                        <span className="font-semibold text-[#E6EDF3]">Total P&L</span>
+                        <span className={`text-xl font-bold ${getColor(matched.grandTotalPnl)}`}>{formatUsd(matched.grandTotalPnl)}</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
