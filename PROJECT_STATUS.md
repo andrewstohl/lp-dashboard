@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 25, 2025 (Phase 2 Complete - Subgraph Migration)  
+> **Last Updated:** November 26, 2025 (Phase 2.0 Reconciliation System - Design Complete)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -362,9 +362,96 @@ lp-dashboard/
 
 ---
 
+## 🚀 Phase 2.0: Reconciliation System (DESIGN COMPLETE)
+
+**Design Document:** [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
+
+**Overview:** Transaction-level reconciliation system enabling users to organize trades into Positions and Strategies with partial allocation support. Inspired by QuickBooks reconciliation workflow.
+
+**Status:** Design Complete, Implementation Pending
+
+### Key Design Decisions
+
+| Decision | Resolution |
+|----------|------------|
+| Page location | `/reconcile` (new navigation tab) |
+| View structure | Single page with collapsible sections (QuickBooks-inspired) |
+| Data hierarchy | Strategy → Position → Transaction |
+| Allocation model | Transaction-level allocation (position allocation is derived) |
+| Reduction handling | Default pro-rata with user override option |
+| History depth | 6 months initially, paginated |
+| Persistence (MVP) | localStorage + JSON export/import |
+| Persistence (Future) | Backend database for multi-user support |
+
+### Core Concepts
+
+**Transaction:** Atomic on-chain event (mint, burn, open, close, fee claim, etc.)
+
+**Position:** Container for transactions sharing the same underlying primitive
+- One LP position (by NFT ID)
+- One perp position (by position key)
+- One staking position (by pool + asset)
+
+**Strategy:** User-defined grouping of related positions with partial allocation support
+- "Q4 Delta Neutral" = LP + Short LINK (100%) + Short WETH (50%)
+- Status derived from positions: OPEN if any position open, CLOSED when all closed
+
+### Key Innovation: Transaction-Level Allocation
+
+Instead of allocating positions to strategies, each transaction is allocated independently:
+
+```
+Position: WETH Short
+├── TXN 1: Open $10,000 → 50% Strategy A, 50% Strategy B
+├── TXN 2: Increase $5,000 → 100% Strategy A
+└── TXN 3: Decrease -$7,000 → Pro-rata or user-specified
+
+Position's allocation to each strategy = weighted sum of transaction allocations
+```
+
+This approach:
+- Handles partial hedging across multiple strategies
+- Provides clear audit trail per transaction
+- Requires no retroactive adjustments
+- Matches established accounting patterns (lot tracking)
+
+### Implementation Phases
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 2.0a | Backend - Transaction fetching APIs | Pending |
+| 2.0b | Frontend - Reconcile page UI | Pending |
+| 2.0c | Allocation logic & localStorage persistence | Pending |
+| 2.0d | Smart suggestions (temporal, token matching) | Pending |
+| 2.0e | Ledger page refactor (Current/Historical tabs) | Pending |
+| 2.0f | Polish & testing | Pending |
+
+### MVP Protocol Support
+
+| Protocol | Type | Transactions |
+|----------|------|--------------|
+| Uniswap V3 | DEX/LP | mint, burn, collect |
+| GMX V2 | Perps | open, increase, decrease, close |
+| AAVE | Staking | stake, unstake, reward_claim |
+
+### Future Protocol Support (Post-MVP)
+
+- **DEXs:** Pancakeswap, Aerodrome, Orca, Raydium
+- **Perps:** Aster
+- **Staking:** Euler, Silo
+
+### Smart Suggestions (MVP)
+
+1. **Temporal grouping:** "3 transactions on Nov 12 happened within 1 hour"
+2. **Token matching:** "Short LINK matches LINK exposure in your LP"
+3. **Unallocated warnings:** "WETH Short is 50% unallocated"
+4. **Unreconciled alerts:** "You have 15 unreconciled transactions"
+
+---
+
 ## 📋 Future Phases (Backlog)
 
-### Phase 3: Enhanced Features (NEXT)
+### Phase 3: Enhanced Features
 - [ ] Section tabs (LP / Perpetuals / Combined navigation)
 - [ ] Skeleton loading screens
 - [ ] Pull-to-refresh functionality
@@ -372,21 +459,23 @@ lp-dashboard/
 - [ ] Range visualization for LP positions
 - [ ] Detailed modal views for positions
 
-### Phase 4: AI Recommendations
+### Phase 4: Multi-Wallet & Portfolio
+- [ ] Wallet selector/switcher
+- [ ] Saved wallets list
+- [ ] Portfolio aggregation across wallets
+- [ ] Portfolio layer (group strategies into portfolios)
+
+### Phase 5: AI Recommendations
 - [ ] Kimi K2 integration for optimization suggestions
 - [ ] Rebalancing recommendations
 - [ ] Gas optimization alerts
 - [ ] Risk scoring system
 
-### Phase 5: Multi-Wallet Support
-- [ ] Wallet selector/switcher
-- [ ] Saved wallets list
-- [ ] Portfolio aggregation across wallets
-
-### Phase 6: Historical Analytics
-- [ ] Historical P&L tracking
+### Phase 6: Advanced Analytics & Reporting
+- [ ] Historical P&L tracking with date ranges (MTD, QTD, YTD)
 - [ ] Fee accumulation over time
-- [ ] Position history
+- [ ] Tax reporting from reconciled data
+- [ ] Strategy templates for common approaches
 
 ---
 
@@ -435,6 +524,7 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 8. **Incremental Development:** Drew prefers single-task focus with immediate testing
 9. **GitHub as Source of Truth:** All changes must be committed and pushed
 10. **Data Accuracy Benchmark:** Metrix Finance used as reference for data precision
+11. **Reconciliation System (Nov 26):** Full design documented in [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
 
 ---
 
@@ -444,6 +534,7 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 - **Frontend:** http://localhost:4001
 - **Backend:** http://localhost:8004
 - **API Docs:** http://localhost:8004/docs (Swagger)
+- **Reconciliation Design:** [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
 
 ### Subgraph URLs
 - **Uniswap V3 (Ethereum):** `https://gateway.thegraph.com/api/{key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV`
