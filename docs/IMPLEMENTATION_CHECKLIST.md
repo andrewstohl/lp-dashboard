@@ -82,11 +82,14 @@ This approach had critical flaws:
 
 ## Phase 2.0c: Allocation Logic & Persistence
 
-### Step 12: localStorage Schema ⬜
-- [ ] 12.1 Create `lib/reconciliation/storage.ts` - Save/load functions
-- [ ] 12.2 Define reconciliation overlay schema (separate from raw txns)
-- [ ] 12.3 Key by `${chain}:${txHash}` for uniqueness
-- [ ] 12.4 Test: Save and reload data
+### Step 12: localStorage Schema ✅ PARTIAL (Hide Feature)
+- [x] 12.1 Create `lib/reconciliation/storage.ts` - Save/load functions
+- [x] 12.2 Define reconciliation overlay schema (separate from raw txns)
+- [x] 12.3 Key by `${chain}:${txHash}` for uniqueness
+- [x] 12.4 Test: Save and reload data
+- [x] 12.5 Added hide/unhide transaction functionality
+- [x] 12.6 Added "Show Hidden" toggle to UI
+- [ ] 12.7 Add position and strategy fields (future steps)
 
 ### Step 13: Position Management ⬜
 - [ ] 13.1 Create `lib/reconciliation/positions.ts` - Position CRUD
@@ -151,14 +154,14 @@ This approach had critical flaws:
 
 ## Current Task
 
-**Step 6b, 8, 9: DeBank Discovery Refactor ✅ COMPLETE**
+**Step 12 (Partial): Transaction Hide/Unhide ✅ COMPLETE**
 
-Successfully refactored transaction discovery to use DeBank as source of truth.
-
-**Test Results:**
-- 39 transactions discovered across 5 chains (eth: 14, arb: 11, base: 12, op: 1, bsc: 1)
-- Protocols detected: GMX V2 (11), Uniswap V3 (4), Socket (3+), 0x, Mayan
-- Chain badges and explorer links working
+Added user-controlled transaction hiding with localStorage persistence:
+- Reconciliation overlay storage created
+- Hide/Unhide in ••• dropdown menu
+- "Show Hidden" toggle button
+- Hidden transactions display with opacity and badge
+- Data persists across page reloads
 
 **Next up:** Step 10 - Filter Bar (chain, protocol, date filters)
 
