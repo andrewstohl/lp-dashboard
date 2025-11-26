@@ -6,44 +6,44 @@
 
 ---
 
+## ⚠️ ARCHITECTURAL REVISION (Nov 26, 2025)
+
+**Problem Identified:** Original Phase 2.0a used subgraph-based adapters for transaction discovery.
+This approach had critical flaws:
+- Only discovered transactions from protocols with coded adapters
+- Only discovered transactions on networks with configured subgraph URLs
+- Missing transactions = unacceptable for enterprise portfolio analysis
+
+**New Architecture (QuickBooks-inspired):**
+
+| Layer | Purpose | Source |
+|-------|---------|--------|
+| **Discovery** | Find ALL transactions | DeBank `/user/history_list` |
+| **Enrichment** | Accurate pricing (on-demand) | Protocol subgraphs |
+
+**Key Decisions:**
+1. Use DeBank's transaction format directly (no conversion layer)
+2. Store reconciliation data as a separate overlay
+3. Subgraphs become enrichment services, not discovery
+4. Add chain/network filter to UI
+
+---
+
 ## Phase 2.0a: Backend - Transaction Fetching
 
-### Step 1: Base Infrastructure ✅
-- [x] 1.1 Create `services/adapters/base.py` - ProtocolAdapter abstract base class (~80 lines)
-- [x] 1.2 Create `services/adapters/__init__.py` - Registry class (~69 lines)
-- [x] 1.3 Test: Import and verify classes load
+### Steps 1-6: Original Adapter Approach ⚠️ DEPRECATED
+- [x] Steps 1-6 completed but architecture was flawed
+- Subgraph adapters moved to `services/adapters/` (kept for future enrichment)
+- Will be refactored to enrichment-only role
 
-### Step 2: Uniswap V3 Adapter ✅
-- [x] 2.1 Create `services/adapters/uniswap_v3.py` - Skeleton with interface
-- [x] 2.2 Add `_fetch_positions()` method - Query positions by owner
-- [x] 2.3 Add `_derive_transactions_from_snapshots()` - Calculate deltas
-- [x] 2.4 Add helper methods for creating mint/burn/collect transactions
-- [x] 2.5 Test: Found 111 transactions across 24 positions for test wallet
-
-### Step 3: GMX V2 Adapter ✅
-- [x] 3.1 Create `services/adapters/gmx_v2.py` - Skeleton with interface
-- [x] 3.2 Add `_fetch_increases()` method with parsing
-- [x] 3.3 Add `_fetch_decreases()` method with parsing
-- [x] 3.4 Add helper methods for token/market symbol lookup
-- [x] 3.5 Test: Found 344 GMX transactions (128 increases, 126 decreases, 46 opens, 44 closes)
-
-### Step 4: Euler Adapter (Stub) ✅
-- [x] 4.1 Create `services/adapters/euler.py` - Stub that returns empty list
-- [x] 4.2 Documented Euler V2 subgraph structure and endpoints
-- [x] 4.3 Registered adapter in ProtocolRegistry
-- [x] 4.4 Test: Adapter loads, returns empty list, doesn't break other adapters
-
-### Step 5: Transaction API Endpoint ✅
-- [x] 5.1 Create `app/api/v1/transactions.py` - New endpoint file (157 lines)
-- [x] 5.2 Add `GET /wallet/{address}/transactions` route with date filters
-- [x] 5.3 Add pagination support (page, limit, totalPages, hasMore)
-- [x] 5.4 Register router in `app/main.py`
-- [x] 5.5 Test: Endpoint works, returns 28 transactions in 30 days with filters working
-
-### Step 6: Integration Test & Commit ✅
-- [x] 6.1 Test full flow: API → Adapters → Subgraphs → Response
-- [x] 6.2 Verify transaction structure matches design doc
-- [x] 6.3 Commit Phase 2.0a to GitHub (commit: 27f727e)
+### Step 6b: DeBank Discovery Refactor 🔄 IN PROGRESS
+- [ ] 6b.1 Create `services/transaction_discovery.py` - DeBank-based discovery
+- [ ] 6b.2 Fetch from DeBank `/user/history_list` across all chains
+- [ ] 6b.3 Return DeBank format directly (no conversion)
+- [ ] 6b.4 Update `/transactions` endpoint to use new discovery service
+- [ ] 6b.5 Add `chain` filter parameter to endpoint
+- [ ] 6b.6 Test: Verify ALL transactions visible (not just Uniswap/GMX)
+- [ ] 6b.7 Commit refactored architecture to GitHub
 
 ---
 
@@ -54,25 +54,28 @@
 - [x] 7.2 Add navigation tab for Reconcile
 - [x] 7.3 Test: Navigate to page, see placeholder
 
-### Step 8: API Client ✅
+### Step 8: API Client ✅ (needs update after 6b)
 - [x] 8.1 Add `fetchTransactions()` to `lib/api.ts`
 - [x] 8.2 Add TypeScript types for Transaction
 - [x] 8.3 Test: Console.log fetched transactions
+- [ ] 8.4 Update types to match DeBank format (after Step 6b)
 
-### Step 9: Transaction List Component ✅
+### Step 9: Transaction List Component ✅ (needs update after 6b)
 - [x] 9.1 Create `TransactionList.tsx` - Display transactions
 - [x] 9.2 Create `TransactionRow.tsx` - Single transaction display
 - [x] 9.3 Add actions menu (••• button) - UI only, no logic yet
 - [x] 9.4 Test: See transactions rendered
+- [ ] 9.5 Update to display DeBank format fields (after Step 6b)
 
 ### Step 10: Filter Bar ⬜
-- [ ] 10.1 Create `FilterBar.tsx` - Date, protocol, type filters
+- [ ] 10.1 Create `FilterBar.tsx` - Date, chain, protocol, type filters
 - [ ] 10.2 Wire filters to API call
-- [ ] 10.3 Test: Filters change displayed transactions
+- [ ] 10.3 Add chain/network filter (eth, arb, op, base, polygon, etc.)
+- [ ] 10.4 Test: Filters change displayed transactions
 
 ### Step 11: Summary Bar ⬜
 - [ ] 11.1 Create `ReconcileSummary.tsx` - Stats display
-- [ ] 11.2 Calculate unreconciled count, total value
+- [ ] 11.2 Calculate unreconciled count, total value by chain
 - [ ] 11.3 Test: Summary updates with data
 
 ---
@@ -81,8 +84,9 @@
 
 ### Step 12: localStorage Schema ⬜
 - [ ] 12.1 Create `lib/reconciliation/storage.ts` - Save/load functions
-- [ ] 12.2 Define storage schema with version
-- [ ] 12.3 Test: Save and reload data
+- [ ] 12.2 Define reconciliation overlay schema (separate from raw txns)
+- [ ] 12.3 Key by `${chain}:${txHash}` for uniqueness
+- [ ] 12.4 Test: Save and reload data
 
 ### Step 13: Position Management ⬜
 - [ ] 13.1 Create `lib/reconciliation/positions.ts` - Position CRUD
@@ -135,11 +139,21 @@
 
 ---
 
+## Phase 2.0f: Enrichment Services (Future)
+
+### Step 20: On-Demand Pricing ⬜
+- [ ] 20.1 Refactor adapters to enrichment-only role
+- [ ] 20.2 Add "Get Accurate Pricing" action per transaction
+- [ ] 20.3 Call subgraphs only when user requests analysis
+- [ ] 20.4 Cache enriched values in reconciliation overlay
+
+---
+
 ## Current Task
 
-**Step 9 COMPLETE ✅**
+**Step 6b: DeBank Discovery Refactor 🔄 IN PROGRESS**
 
-**Next up:** Step 10 - Filter Bar (Phase 2.0b: Frontend - Reconcile Page UI)
+Refactoring transaction discovery to use DeBank as source of truth for complete coverage.
 
 ---
 

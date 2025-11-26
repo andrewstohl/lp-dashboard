@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 26, 2025 (Phase 2.0a Backend Transaction Fetching - Complete)  
+> **Last Updated:** November 26, 2025 (Phase 2.0a Architecture Revision - DeBank Discovery)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -41,6 +41,22 @@ Build an institutional-grade DeFi LP Intelligence Dashboard that provides:
 - **Icons:** Lucide React 0.554.0
 
 ### Data Architecture (Standardized)
+
+#### Transaction Discovery & Analysis (Two-Layer Architecture)
+
+| Layer | Purpose | Source | Coverage |
+|-------|---------|--------|----------|
+| **Discovery** | Find ALL transactions | DeBank `/user/history_list` | All chains, all protocols |
+| **Enrichment** | Accurate pricing (on-demand) | Protocol subgraphs | Known protocols only |
+
+**Key Principles:**
+- DeBank is source of truth for "what transactions occurred"
+- DeBank format used directly (no conversion layer = less code bloat)
+- Reconciliation data stored as separate overlay (allocation, status, enriched values)
+- Subgraphs called on-demand for accurate historical pricing, not during discovery
+- Guarantees no missing transactions for enterprise portfolio analysis
+
+#### Position Analysis (Ledger View)
 
 | Data Type | LP Positions | Perp Positions |
 |-----------|-------------|----------------|
@@ -369,7 +385,7 @@ lp-dashboard/
 
 **Overview:** Transaction-level reconciliation system enabling users to organize trades into Positions and Strategies with partial allocation support. Inspired by QuickBooks reconciliation workflow.
 
-**Status:** Phase 2.0a Complete, Phase 2.0b Pending
+**Status:** Phase 2.0a Refactoring (DeBank Discovery), Phase 2.0b In Progress
 
 ### Key Design Decisions
 
@@ -382,6 +398,9 @@ lp-dashboard/
 | Reduction handling | Default pro-rata with user override option |
 | History depth | 6 months initially, paginated |
 | Persistence (MVP) | localStorage + JSON export/import |
+| **Transaction discovery** | **DeBank `/user/history_list` for complete coverage** |
+| **Transaction format** | **Use DeBank format directly (no conversion)** |
+| **Enrichment** | **Protocol subgraphs on-demand, not during discovery** |
 | Persistence (Future) | Backend database for multi-user support |
 
 ### Core Concepts
@@ -420,8 +439,8 @@ This approach:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 2.0a | Backend - Transaction fetching APIs | ✅ Complete |
-| 2.0b | Frontend - Reconcile page UI | Pending |
+| 2.0a | Backend - Transaction fetching APIs | ⚠️ Refactoring to DeBank |
+| 2.0b | Frontend - Reconcile page UI | In Progress |
 | 2.0c | Allocation logic & localStorage persistence | Pending |
 | 2.0d | Smart suggestions (temporal, token matching) | Pending |
 | 2.0e | Ledger page refactor (Current/Historical tabs) | Pending |
@@ -429,7 +448,25 @@ This approach:
 
 ### Phase 2.0a Completed (Nov 26, 2025)
 
-**Protocol Adapter System:**
+**⚠️ ARCHITECTURE REVISION (Nov 26, 2025):**
+
+Original adapter-based approach had critical flaws:
+- Only discovered transactions from protocols with coded adapters
+- Only discovered transactions on networks with configured subgraph URLs
+- Missing transactions unacceptable for enterprise portfolio analysis
+
+**New Two-Layer Architecture:**
+- **Layer 1 (Discovery):** DeBank `/user/history_list` → ALL transactions, ALL chains
+- **Layer 2 (Enrichment):** Protocol subgraphs → Accurate pricing on-demand
+
+**Key Decision:** Use DeBank's transaction format directly (no conversion) to reduce code bloat.
+Reconciliation data stored as separate overlay keyed by `${chain}:${txHash}`.
+
+Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment role.
+
+---
+
+**Original Protocol Adapter System (Now Enrichment-Only):**
 - Base adapter class with standardized Transaction format
 - ProtocolRegistry for managing multiple adapters
 - Uniswap V3 adapter: mint, burn, collect transactions
