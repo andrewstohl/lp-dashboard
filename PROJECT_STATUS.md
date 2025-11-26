@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 26, 2025 (Phase 2.0 Reconciliation System - Design Complete)  
+> **Last Updated:** November 26, 2025 (Phase 2.0a Backend Transaction Fetching - Complete)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -362,13 +362,14 @@ lp-dashboard/
 
 ---
 
-## 🚀 Phase 2.0: Reconciliation System (DESIGN COMPLETE)
+## 🚀 Phase 2.0: Reconciliation System (IN PROGRESS)
 
 **Design Document:** [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
+**Implementation Tracker:** [docs/IMPLEMENTATION_CHECKLIST.md](docs/IMPLEMENTATION_CHECKLIST.md)
 
 **Overview:** Transaction-level reconciliation system enabling users to organize trades into Positions and Strategies with partial allocation support. Inspired by QuickBooks reconciliation workflow.
 
-**Status:** Design Complete, Implementation Pending
+**Status:** Phase 2.0a Complete, Phase 2.0b Pending
 
 ### Key Design Decisions
 
@@ -419,26 +420,46 @@ This approach:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 2.0a | Backend - Transaction fetching APIs | Pending |
+| 2.0a | Backend - Transaction fetching APIs | ✅ Complete |
 | 2.0b | Frontend - Reconcile page UI | Pending |
 | 2.0c | Allocation logic & localStorage persistence | Pending |
 | 2.0d | Smart suggestions (temporal, token matching) | Pending |
 | 2.0e | Ledger page refactor (Current/Historical tabs) | Pending |
 | 2.0f | Polish & testing | Pending |
 
+### Phase 2.0a Completed (Nov 26, 2025)
+
+**Protocol Adapter System:**
+- Base adapter class with standardized Transaction format
+- ProtocolRegistry for managing multiple adapters
+- Uniswap V3 adapter: mint, burn, collect transactions
+- GMX V2 adapter: open, increase, decrease, close transactions
+- Euler adapter: stub for future implementation
+
+**Transaction API Endpoint:**
+- `GET /api/v1/wallet/{address}/transactions`
+- Date filtering (ISO format or relative like "30d", "6m")
+- Protocol and type filters
+- Pagination with summary counts
+
+**Test Results (6 months, test wallet):**
+- 455 total transactions
+- Uniswap V3: 111 (46 mints, 31 burns, 34 collects)
+- GMX V2: 344 (46 opens, 128 increases, 126 decreases, 44 closes)
+
 ### MVP Protocol Support
 
-| Protocol | Type | Transactions |
-|----------|------|--------------|
-| Uniswap V3 | DEX/LP | mint, burn, collect |
-| GMX V2 | Perps | open, increase, decrease, close |
-| AAVE | Staking | stake, unstake, reward_claim |
+| Protocol | Type | Transactions | Status |
+|----------|------|--------------|--------|
+| Uniswap V3 | DEX/LP | mint, burn, collect | ✅ Implemented |
+| GMX V2 | Perps | open, increase, decrease, close | ✅ Implemented |
+| Euler | Lending | deposit, withdraw, borrow, repay | Stub (future) |
 
 ### Future Protocol Support (Post-MVP)
 
 - **DEXs:** Pancakeswap, Aerodrome, Orca, Raydium
 - **Perps:** Aster
-- **Staking:** Euler, Silo
+- **Lending/Staking:** AAVE, Silo
 
 ### Smart Suggestions (MVP)
 
@@ -446,6 +467,10 @@ This approach:
 2. **Token matching:** "Short LINK matches LINK exposure in your LP"
 3. **Unallocated warnings:** "WETH Short is 50% unallocated"
 4. **Unreconciled alerts:** "You have 15 unreconciled transactions"
+
+**Key Commits:**
+- `8d321c8` - Phase 2.0 Reconciliation System design documentation
+- `27f727e` - Phase 2.0a: Backend transaction fetching (adapters + API)
 
 ---
 

@@ -40,10 +40,10 @@
 - [x] 5.4 Register router in `app/main.py`
 - [x] 5.5 Test: Endpoint works, returns 28 transactions in 30 days with filters working
 
-### Step 6: Integration Test ⬜
-- [ ] 6.1 Test full flow: API → Adapters → Subgraphs → Response
-- [ ] 6.2 Verify transaction structure matches design doc
-- [ ] 6.3 Commit Phase 2.0a to GitHub
+### Step 6: Integration Test & Commit ✅
+- [x] 6.1 Test full flow: API → Adapters → Subgraphs → Response
+- [x] 6.2 Verify transaction structure matches design doc
+- [x] 6.3 Commit Phase 2.0a to GitHub (commit: 27f727e)
 
 ---
 
