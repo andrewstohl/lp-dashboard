@@ -15,7 +15,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import logging
 
-from backend.services.discovery import get_discovery_service, CHAIN_NAMES
+from backend.services.discovery import get_discovery_service, DEFAULT_CHAIN_NAMES
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -107,7 +107,7 @@ async def get_wallet_transactions(
                 "wallet": address.lower(),
                 "tokenDict": result["token_dict"],
                 "projectDict": result["project_dict"],
-                "chainNames": CHAIN_NAMES,
+                "chainNames": result.get("chain_names", DEFAULT_CHAIN_NAMES),
                 "pagination": {
                     "page": page,
                     "limit": limit,

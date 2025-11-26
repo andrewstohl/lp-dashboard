@@ -6,8 +6,13 @@ DeBank is used for discovery (completeness), while protocol-specific
 subgraphs can be used later for enrichment (accuracy).
 
 Architecture:
-- Discovery: DeBank /user/history_list (this service)
+- Discovery: DeBank /user/all_history_list (this service)
 - Enrichment: Subgraphs (on-demand, separate service)
+
+Key improvements:
+- Uses /user/used_chain_list to find ALL chains wallet has used
+- Uses /user/all_history_list for cross-chain transaction discovery
+- Proper pagination to fetch complete history
 """
 
 import httpx
@@ -21,21 +26,8 @@ logger = logging.getLogger(__name__)
 
 DEBANK_BASE_URL = "https://pro-openapi.debank.com/v1"
 
-# Supported chains for discovery
-SUPPORTED_CHAINS = [
-    "eth",      # Ethereum
-    "arb",      # Arbitrum
-    "op",       # Optimism
-    "base",     # Base
-    "matic",    # Polygon
-    "bsc",      # BNB Chain
-    "avax",     # Avalanche
-    "ftm",      # Fantom
-    "sol",      # Solana (if supported)
-]
-
-# Chain display names
-CHAIN_NAMES = {
+# Chain display names (will be dynamically updated from API)
+DEFAULT_CHAIN_NAMES = {
     "eth": "Ethereum",
     "arb": "Arbitrum",
     "op": "Optimism", 
@@ -44,6 +36,14 @@ CHAIN_NAMES = {
     "bsc": "BNB Chain",
     "avax": "Avalanche",
     "ftm": "Fantom",
+    "uni": "Unichain",
+    "scrl": "Scroll",
+    "xdai": "Gnosis Chain",
+    "blast": "Blast",
+    "monad": "Monad",
+    "linea": "Linea",
+    "zksync": "zkSync Era",
+    "mnt": "Mantle",
 }
 
 
@@ -59,9 +59,34 @@ class TransactionDiscoveryService:
             headers={"AccessKey": settings.debank_access_key},
             timeout=30.0
         )
+        self.chain_names = DEFAULT_CHAIN_NAMES.copy()
     
     async def close(self):
         await self.client.aclose()
+    
+    async def get_used_chains(self, wallet_address: str) -> List[Dict[str, Any]]:
+        """
+        Get list of all chains this wallet has ever used.
+        This ensures we don't miss any transactions on obscure chains.
+        """
+        wallet = wallet_address.lower()
+        try:
+            response = await self.client.get(
+                "/user/used_chain_list",
+                params={"id": wallet}
+            )
+            response.raise_for_status()
+            chains = response.json()
+            
+            # Update chain names from API response
+            for chain in chains:
+                self.chain_names[chain["id"]] = chain["name"]
+            
+            logger.info(f"Wallet {wallet[:10]}... has used {len(chains)} chains")
+            return chains
+        except Exception as e:
+            logger.error(f"Error fetching used chains: {e}")
+            return []
     
     async def discover_transactions(
         self,
@@ -70,18 +95,18 @@ class TransactionDiscoveryService:
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
         page_count: int = 20,
-        max_pages_per_chain: int = 50
+        max_pages: int = 100
     ) -> Dict[str, Any]:
         """
-        Discover all transactions for a wallet across specified chains.
+        Discover all transactions for a wallet across all chains.
         
         Args:
             wallet_address: The wallet to query
-            chains: List of chain IDs to query (default: all supported)
+            chains: Optional list of chain IDs to filter (default: all used chains)
             since: Only include transactions after this time
             until: Only include transactions before this time
             page_count: Items per page (max 20)
-            max_pages_per_chain: Max pages to fetch per chain
+            max_pages: Max pages to fetch total
             
         Returns:
             Dict with:
@@ -89,62 +114,53 @@ class TransactionDiscoveryService:
             - token_dict: Token metadata
             - project_dict: Project/protocol metadata
             - chains_queried: Which chains were searched
+            - chains_with_data: Chains that had transactions
             - summary: Counts by chain and project
         """
         wallet = wallet_address.lower()
-        chains_to_query = chains or SUPPORTED_CHAINS
+        
+        # First, get all chains this wallet has used
+        used_chains = await self.get_used_chains(wallet)
+        used_chain_ids = [c["id"] for c in used_chains]
+        
+        # Filter to specific chains if requested
+        chains_to_query = chains if chains else used_chain_ids
         
         since_ts = int(since.timestamp()) if since else None
         until_ts = int(until.timestamp()) if until else None
         
-        all_transactions = []
-        merged_token_dict = {}
-        merged_project_dict = {}
-        chains_with_data = []
-        
-        for chain in chains_to_query:
-            try:
-                result = await self._fetch_chain_history(
-                    wallet, chain, since_ts, until_ts,
-                    page_count, max_pages_per_chain
-                )
-                
-                if result["transactions"]:
-                    chains_with_data.append(chain)
-                    all_transactions.extend(result["transactions"])
-                    merged_token_dict.update(result["token_dict"])
-                    merged_project_dict.update(result["project_dict"])
-                    
-            except Exception as e:
-                logger.warning(f"Error fetching {chain} history: {e}")
-                continue
-        
-        # Sort all transactions by timestamp (newest first)
-        all_transactions.sort(key=lambda x: x.get("time_at", 0), reverse=True)
+        # Use all_history_list for cross-chain discovery
+        result = await self._fetch_all_history(
+            wallet, chains_to_query, since_ts, until_ts,
+            page_count, max_pages
+        )
         
         # Build summary
-        summary = self._build_summary(all_transactions)
+        summary = self._build_summary(result["transactions"])
         
         return {
-            "transactions": all_transactions,
-            "token_dict": merged_token_dict,
-            "project_dict": merged_project_dict,
+            "transactions": result["transactions"],
+            "token_dict": result["token_dict"],
+            "project_dict": result["project_dict"],
             "chains_queried": chains_to_query,
-            "chains_with_data": chains_with_data,
+            "chains_with_data": list(summary["byChain"].keys()),
+            "chain_names": self.chain_names,
             "summary": summary
         }
-    
-    async def _fetch_chain_history(
+
+    async def _fetch_all_history(
         self,
         wallet: str,
-        chain: str,
+        chains: List[str],
         since_ts: Optional[int],
         until_ts: Optional[int],
         page_count: int,
         max_pages: int
     ) -> Dict[str, Any]:
-        """Fetch transaction history for a single chain"""
-        
+        """
+        Fetch transaction history across all chains using all_history_list endpoint.
+        This is more efficient than querying each chain separately.
+        """
         all_transactions = []
         token_dict = {}
         project_dict = {}
@@ -153,14 +169,18 @@ class TransactionDiscoveryService:
         for page in range(max_pages):
             params = {
                 "id": wallet,
-                "chain_id": chain,
-                "page_count": min(page_count, 20)
+                "page_count": min(page_count, 20)  # DeBank max is 20
             }
+            
+            # Add chain filter if specific chains requested
+            if chains:
+                params["chain_ids"] = ",".join(chains)
+            
             if start_time:
-                params["start_time"] = start_time
+                params["start_time"] = int(start_time)
             
             try:
-                response = await self.client.get("/user/history_list", params=params)
+                response = await self.client.get("/user/all_history_list", params=params)
                 response.raise_for_status()
                 data = response.json()
                 
@@ -168,17 +188,21 @@ class TransactionDiscoveryService:
                 token_dict.update(data.get("token_dict", {}))
                 project_dict.update(data.get("project_dict", {}))
                 
+                # Update cate_dict for category names
+                cate_dict = data.get("cate_dict", {})
+                
                 history = data.get("history_list", [])
                 if not history:
+                    logger.info(f"No more transactions after page {page}")
                     break
                 
-                # Filter by date range and add to results
+                # Process transactions
                 for tx in history:
                     tx_time = tx.get("time_at", 0)
                     
-                    # Skip if before our range
+                    # Skip if before our date range
                     if since_ts and tx_time < since_ts:
-                        # We've gone past our date range, stop pagination
+                        logger.info(f"Reached date limit at page {page}, tx time {tx_time} < {since_ts}")
                         return {
                             "transactions": all_transactions,
                             "token_dict": token_dict,
@@ -189,25 +213,36 @@ class TransactionDiscoveryService:
                     if tx.get("is_scam", False):
                         continue
                     
+                    # Add category name from cate_dict
+                    if tx.get("cate_id") and tx["cate_id"] in cate_dict:
+                        tx["cate_name"] = cate_dict[tx["cate_id"]]
+                    
                     all_transactions.append(tx)
                 
-                # Update start_time for next page
-                start_time = history[-1].get("time_at")
+                # Update start_time for next page (use oldest tx from this batch)
+                oldest_tx_time = history[-1].get("time_at")
+                if oldest_tx_time:
+                    start_time = int(oldest_tx_time)
                 
                 # If we got fewer than requested, we've reached the end
                 if len(history) < page_count:
+                    logger.info(f"Reached end of history at page {page} ({len(history)} < {page_count})")
                     break
+                
+                logger.info(f"Page {page}: got {len(history)} txs, total now {len(all_transactions)}")
                     
             except Exception as e:
-                logger.error(f"Error fetching {chain} history page {page}: {e}")
+                logger.error(f"Error fetching all_history_list page {page}: {e}")
                 break
+        
+        logger.info(f"Fetched total {len(all_transactions)} transactions across {len(set(tx.get('chain') for tx in all_transactions))} chains")
         
         return {
             "transactions": all_transactions,
             "token_dict": token_dict,
             "project_dict": project_dict
         }
-    
+
     def _build_summary(self, transactions: List[Dict]) -> Dict[str, Any]:
         """Build summary statistics from transactions"""
         by_chain = {}
