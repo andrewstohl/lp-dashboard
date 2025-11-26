@@ -73,10 +73,11 @@ This approach had critical flaws:
 - [x] 10.3 Add chain/network filter (eth, arb, op, base, polygon, etc.)
 - [x] 10.4 Test: Filters change displayed transactions
 
-### Step 11: Summary Bar ⬜
-- [ ] 11.1 Create `ReconcileSummary.tsx` - Stats display
-- [ ] 11.2 Calculate unreconciled count, total value by chain
-- [ ] 11.3 Test: Summary updates with data
+### Step 11: Summary Bar ✅ COMPLETE
+- [x] 11.1 Create `ReconcileSummary.tsx` - Stats display
+- [x] 11.2 Calculate total value in/out/net by chain
+- [x] 11.3 Show unreconciled count (prep for future reconciliation tracking)
+- [x] 11.4 Test: Summary updates with data and respects hidden transactions
 
 ---
 
@@ -154,16 +155,17 @@ This approach had critical flaws:
 
 ## Current Task
 
-**Step 10: Filter Bar ✅ COMPLETE**
+**Step 11: Summary Bar ✅ COMPLETE**
 
-Added FilterBar component with:
-- Chain filter (color-coded dropdown)
-- Protocol filter (from discovered projects)
-- Date range filter (7d, 30d, 90d, 6m, 1y, all)
-- Apply/Clear buttons
-- Server-side filtering via API
+Added ReconcileSummary component with:
+- Total Received / Total Sent / Net Flow cards
+- Reconciliation status (unreconciled count)
+- By-Chain breakdown with value details
+- Respects hidden transaction filtering
 
-**Next up:** Step 11 - Summary Bar (or continue to Phase 2.0c allocation logic)
+**Phase 2.0b (Frontend UI) Complete!**
+
+**Next up:** Phase 2.0c - Step 13: Position Management
 
 ---
 
