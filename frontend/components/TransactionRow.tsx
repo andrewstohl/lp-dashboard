@@ -2,13 +2,16 @@
 
 import { useState } from "react";
 import { type Transaction, type TokenMeta, type ProjectMeta, formatCurrency } from "@/lib/api";
-import { MoreHorizontal, ExternalLink, Plus, FolderPlus } from "lucide-react";
+import { MoreHorizontal, ExternalLink, Plus, FolderPlus, EyeOff, Eye } from "lucide-react";
 
 interface TransactionRowProps {
   transaction: Transaction;
   tokenDict: Record<string, TokenMeta>;
   projectDict: Record<string, ProjectMeta>;
   chainNames: Record<string, string>;
+  isHidden?: boolean;
+  onHide?: (chain: string, txHash: string) => void;
+  onUnhide?: (chain: string, txHash: string) => void;
 }
 
 // Chain explorer URLs
@@ -62,7 +65,10 @@ export function TransactionRow({
   transaction, 
   tokenDict, 
   projectDict,
-  chainNames 
+  chainNames,
+  isHidden = false,
+  onHide,
+  onUnhide
 }: TransactionRowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   
@@ -233,6 +239,29 @@ export function TransactionRow({
               Create Strategy
             </button>
             <div className="border-t border-[#30363D] my-1" />
+            {isHidden ? (
+              <button
+                onClick={() => { 
+                  setMenuOpen(false); 
+                  onUnhide?.(transaction.chain, transaction.id);
+                }}
+                className="w-full px-4 py-2 text-left text-[#3FB950] hover:bg-[#21262D] flex items-center gap-2"
+              >
+                <Eye className="w-4 h-4" />
+                Unhide Transaction
+              </button>
+            ) : (
+              <button
+                onClick={() => { 
+                  setMenuOpen(false); 
+                  onHide?.(transaction.chain, transaction.id);
+                }}
+                className="w-full px-4 py-2 text-left text-[#8B949E] hover:bg-[#21262D] flex items-center gap-2"
+              >
+                <EyeOff className="w-4 h-4" />
+                Hide Transaction
+              </button>
+            )}
             <a
               href={`${explorerUrl}${transaction.id}`}
               target="_blank"

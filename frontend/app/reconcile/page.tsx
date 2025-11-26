@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Wallet, Search, FileCheck2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Wallet, Search, FileCheck2, Eye, EyeOff } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
 import { 
@@ -11,6 +11,14 @@ import {
   type TokenMeta,
   type ProjectMeta
 } from "@/lib/api";
+import {
+  loadReconciliationStore,
+  saveReconciliationStore,
+  hideTransaction,
+  unhideTransaction,
+  getHiddenTxKeys,
+  type ReconciliationStore
+} from "@/lib/reconciliation/storage";
 
 export default function ReconcilePage() {
   const [walletAddress, setWalletAddress] = useState(() => {
@@ -26,6 +34,40 @@ export default function ReconcilePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<TransactionsResponse['data']['summary'] | null>(null);
+
+  // Reconciliation state
+  const [reconciliationStore, setReconciliationStore] = useState<ReconciliationStore | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const [hiddenTxKeys, setHiddenTxKeys] = useState<Set<string>>(new Set());
+
+  // Load reconciliation store when wallet changes
+  useEffect(() => {
+    if (walletAddress && typeof window !== 'undefined') {
+      const store = loadReconciliationStore(walletAddress);
+      setReconciliationStore(store);
+      setHiddenTxKeys(new Set(getHiddenTxKeys(store)));
+    }
+  }, [walletAddress]);
+
+  // Handle hiding a transaction
+  const handleHide = useCallback((chain: string, txHash: string) => {
+    if (!reconciliationStore) return;
+    
+    const updatedStore = hideTransaction(reconciliationStore, chain, txHash);
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    setHiddenTxKeys(new Set(getHiddenTxKeys(updatedStore)));
+  }, [reconciliationStore]);
+
+  // Handle unhiding a transaction
+  const handleUnhide = useCallback((chain: string, txHash: string) => {
+    if (!reconciliationStore) return;
+    
+    const updatedStore = unhideTransaction(reconciliationStore, chain, txHash);
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    setHiddenTxKeys(new Set(getHiddenTxKeys(updatedStore)));
+  }, [reconciliationStore]);
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -112,6 +154,7 @@ export default function ReconcilePage() {
           </div>
         ) : summary ? (
           <div className="space-y-6">
+            {/* Summary cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
                 <p className="text-[#8B949E] text-sm">Total Transactions</p>
@@ -124,6 +167,8 @@ export default function ReconcilePage() {
                 </div>
               ))}
             </div>
+
+            {/* Protocol breakdown */}
             {summary.byProject && Object.keys(summary.byProject).length > 0 && (
               <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
                 <p className="text-[#8B949E] text-sm mb-3">By Protocol</p>
@@ -144,12 +189,35 @@ export default function ReconcilePage() {
                 </div>
               </div>
             )}
+            
+            {/* Show Hidden Toggle */}
+            {hiddenTxKeys.size > 0 && (
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowHidden(!showHidden)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                    showHidden 
+                      ? 'bg-[#58A6FF] text-[#0D1117]' 
+                      : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                  {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
+                </button>
+              </div>
+            )}
+            
+            {/* Transaction List */}
             <TransactionList 
               transactions={transactions}
               tokenDict={tokenDict}
               projectDict={projectDict}
               chainNames={chainNames}
-              title={`Discovered Transactions (${transactions.length})`}
+              hiddenTxKeys={hiddenTxKeys}
+              showHidden={showHidden}
+              onHide={handleHide}
+              onUnhide={handleUnhide}
+              title={`Discovered Transactions`}
               emptyMessage="No transactions found for this wallet"
             />
           </div>
