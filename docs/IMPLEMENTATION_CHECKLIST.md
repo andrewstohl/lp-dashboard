@@ -59,11 +59,11 @@
 - [x] 8.2 Add TypeScript types for Transaction
 - [x] 8.3 Test: Console.log fetched transactions
 
-### Step 9: Transaction List Component ⬜
-- [ ] 9.1 Create `TransactionList.tsx` - Display transactions
-- [ ] 9.2 Create `TransactionRow.tsx` - Single transaction display
-- [ ] 9.3 Add actions menu (••• button) - UI only, no logic yet
-- [ ] 9.4 Test: See transactions rendered
+### Step 9: Transaction List Component ✅
+- [x] 9.1 Create `TransactionList.tsx` - Display transactions
+- [x] 9.2 Create `TransactionRow.tsx` - Single transaction display
+- [x] 9.3 Add actions menu (••• button) - UI only, no logic yet
+- [x] 9.4 Test: See transactions rendered
 
 ### Step 10: Filter Bar ⬜
 - [ ] 10.1 Create `FilterBar.tsx` - Date, protocol, type filters
@@ -137,9 +137,9 @@
 
 ## Current Task
 
-**Step 8 COMPLETE ✅**
+**Step 9 COMPLETE ✅**
 
-**Next up:** Step 9 - Transaction List Component (Phase 2.0b: Frontend - Reconcile Page UI)
+**Next up:** Step 10 - Filter Bar (Phase 2.0b: Frontend - Reconcile Page UI)
 
 ---
 

@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Wallet, Search, FileCheck2 } from "lucide-react";
+import { Wallet, Search, FileCheck2, RefreshCw } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
+import { TransactionList } from "@/components/TransactionList";
 import { fetchTransactions, type Transaction, type TransactionsResponse } from "@/lib/api";
 
 export default function ReconcilePage() {
@@ -104,25 +105,27 @@ export default function ReconcilePage() {
             <p className="text-[#8B949E]">{error}</p>
           </div>
         ) : summary ? (
-          <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-8">
-            <h2 className="text-xl font-semibold text-[#E6EDF3] mb-4">
-              Transactions Loaded
-            </h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-[#0D1117] rounded-lg p-4">
-                <p className="text-[#8B949E] text-sm">Total</p>
+          <div className="space-y-6">
+            {/* Summary Cards */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
+                <p className="text-[#8B949E] text-sm">Total Transactions</p>
                 <p className="text-2xl font-bold text-[#E6EDF3]">{summary.totalTransactions}</p>
               </div>
               {Object.entries(summary.byProtocol || {}).map(([protocol, count]) => (
-                <div key={protocol} className="bg-[#0D1117] rounded-lg p-4">
+                <div key={protocol} className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
                   <p className="text-[#8B949E] text-sm">{protocol}</p>
                   <p className="text-2xl font-bold text-[#58A6FF]">{count}</p>
                 </div>
               ))}
             </div>
-            <p className="text-[#8B949E] text-sm">
-              Check browser console for full transaction data (Step 8 test)
-            </p>
+            
+            {/* Transaction List */}
+            <TransactionList 
+              transactions={transactions} 
+              title="Unreconciled Transactions"
+              emptyMessage="No transactions found for this wallet"
+            />
           </div>
         ) : (
           <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
