@@ -54,10 +54,10 @@
 - [x] 7.2 Add navigation tab for Reconcile
 - [x] 7.3 Test: Navigate to page, see placeholder
 
-### Step 8: API Client ⬜
-- [ ] 8.1 Add `fetchTransactions()` to `lib/api.ts`
-- [ ] 8.2 Add TypeScript types for Transaction
-- [ ] 8.3 Test: Console.log fetched transactions
+### Step 8: API Client ✅
+- [x] 8.1 Add `fetchTransactions()` to `lib/api.ts`
+- [x] 8.2 Add TypeScript types for Transaction
+- [x] 8.3 Test: Console.log fetched transactions
 
 ### Step 9: Transaction List Component ⬜
 - [ ] 9.1 Create `TransactionList.tsx` - Display transactions
@@ -137,9 +137,9 @@
 
 ## Current Task
 
-**Step 7 COMPLETE ✅**
+**Step 8 COMPLETE ✅**
 
-**Next up:** Step 8 - API Client (Phase 2.0b: Frontend - Reconcile Page UI)
+**Next up:** Step 9 - Transaction List Component (Phase 2.0b: Frontend - Reconcile Page UI)
 
 ---
 

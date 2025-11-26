@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Wallet, Search, FileCheck2 } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
+import { fetchTransactions, type Transaction, type TransactionsResponse } from "@/lib/api";
 
 export default function ReconcilePage() {
   const [walletAddress, setWalletAddress] = useState(() => {
@@ -11,11 +12,46 @@ export default function ReconcilePage() {
     }
     return '0x23b50a703d3076b73584df48251931ebf5937ba2';
   });
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [summary, setSummary] = useState<TransactionsResponse['data']['summary'] | null>(null);
 
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    // Will be implemented in Step 8
-    console.log("Fetching transactions for:", walletAddress);
+    
+    if (!walletAddress.trim()) {
+      setError("Please enter a wallet address");
+      return;
+    }
+
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lastWalletAddress', walletAddress.trim());
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const result = await fetchTransactions(walletAddress.trim(), { 
+        since: '6m',  // Last 6 months
+        limit: 50 
+      });
+      
+      setTransactions(result.data.transactions);
+      setSummary(result.data.summary);
+      
+      // Console log for testing (Step 8.3)
+      console.log('Transactions Response:', result);
+      console.log('Transaction count:', result.data.transactions.length);
+      console.log('Summary:', result.data.summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch transactions");
+      setTransactions([]);
+      setSummary(null);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -55,22 +91,54 @@ export default function ReconcilePage() {
         </div>
       </header>
 
-      {/* Main Content - Placeholder */}
+      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Placeholder content */}
-        <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
-          <FileCheck2 className="w-16 h-16 text-[#58A6FF] mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-[#E6EDF3] mb-2">
-            Transaction Reconciliation
-          </h2>
-          <p className="text-[#8B949E] max-w-md mx-auto">
-            Organize your DeFi transactions into Positions and Strategies. 
-            Track P&L across coordinated trades.
-          </p>
-          <p className="text-[#8B949E] text-sm mt-4">
-            Coming soon: Transaction list, allocation controls, and smart suggestions.
-          </p>
-        </div>
+        {loading ? (
+          <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
+            <div className="animate-spin w-8 h-8 border-2 border-[#58A6FF] border-t-transparent rounded-full mx-auto mb-4" />
+            <p className="text-[#8B949E]">Loading transactions...</p>
+          </div>
+        ) : error ? (
+          <div className="bg-[#161B22] rounded-lg border border-[#F85149] p-12 text-center">
+            <p className="text-[#F85149] mb-2">Error</p>
+            <p className="text-[#8B949E]">{error}</p>
+          </div>
+        ) : summary ? (
+          <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-8">
+            <h2 className="text-xl font-semibold text-[#E6EDF3] mb-4">
+              Transactions Loaded
+            </h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-[#0D1117] rounded-lg p-4">
+                <p className="text-[#8B949E] text-sm">Total</p>
+                <p className="text-2xl font-bold text-[#E6EDF3]">{summary.total_transactions}</p>
+              </div>
+              {Object.entries(summary.by_protocol).map(([protocol, count]) => (
+                <div key={protocol} className="bg-[#0D1117] rounded-lg p-4">
+                  <p className="text-[#8B949E] text-sm">{protocol}</p>
+                  <p className="text-2xl font-bold text-[#58A6FF]">{count}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-[#8B949E] text-sm">
+              Check browser console for full transaction data (Step 8 test)
+            </p>
+          </div>
+        ) : (
+          <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
+            <FileCheck2 className="w-16 h-16 text-[#58A6FF] mx-auto mb-4" />
+            <h2 className="text-xl font-semibold text-[#E6EDF3] mb-2">
+              Transaction Reconciliation
+            </h2>
+            <p className="text-[#8B949E] max-w-md mx-auto">
+              Organize your DeFi transactions into Positions and Strategies. 
+              Track P&L across coordinated trades.
+            </p>
+            <p className="text-[#8B949E] text-sm mt-4">
+              Click "Load" to fetch transactions.
+            </p>
+          </div>
+        )}
       </main>
     </div>
   );
