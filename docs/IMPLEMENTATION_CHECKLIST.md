@@ -67,11 +67,11 @@ This approach had critical flaws:
 - [x] 9.4 Test: See transactions rendered
 - [x] 9.5 Updated to display DeBank format with chain badges and metadata
 
-### Step 10: Filter Bar ⬜
-- [ ] 10.1 Create `FilterBar.tsx` - Date, chain, protocol, type filters
-- [ ] 10.2 Wire filters to API call
-- [ ] 10.3 Add chain/network filter (eth, arb, op, base, polygon, etc.)
-- [ ] 10.4 Test: Filters change displayed transactions
+### Step 10: Filter Bar ✅ COMPLETE
+- [x] 10.1 Create `FilterBar.tsx` - Date, chain, protocol, type filters
+- [x] 10.2 Wire filters to API call
+- [x] 10.3 Add chain/network filter (eth, arb, op, base, polygon, etc.)
+- [x] 10.4 Test: Filters change displayed transactions
 
 ### Step 11: Summary Bar ⬜
 - [ ] 11.1 Create `ReconcileSummary.tsx` - Stats display
@@ -154,16 +154,16 @@ This approach had critical flaws:
 
 ## Current Task
 
-**Step 12 (Partial): Transaction Hide/Unhide ✅ COMPLETE**
+**Step 10: Filter Bar ✅ COMPLETE**
 
-Added user-controlled transaction hiding with localStorage persistence:
-- Reconciliation overlay storage created
-- Hide/Unhide in ••• dropdown menu
-- "Show Hidden" toggle button
-- Hidden transactions display with opacity and badge
-- Data persists across page reloads
+Added FilterBar component with:
+- Chain filter (color-coded dropdown)
+- Protocol filter (from discovered projects)
+- Date range filter (7d, 30d, 90d, 6m, 1y, all)
+- Apply/Clear buttons
+- Server-side filtering via API
 
-**Next up:** Step 10 - Filter Bar (chain, protocol, date filters)
+**Next up:** Step 11 - Summary Bar (or continue to Phase 2.0c allocation logic)
 
 ---
 
