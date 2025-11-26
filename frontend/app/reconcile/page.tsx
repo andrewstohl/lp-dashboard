@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Wallet, Search, FileCheck2, Eye, EyeOff } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
+import { FilterBar } from "@/components/FilterBar";
 import { 
   fetchTransactions, 
   type Transaction, 
@@ -34,6 +35,12 @@ export default function ReconcilePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<TransactionsResponse['data']['summary'] | null>(null);
+  const [chainsWithData, setChainsWithData] = useState<string[]>([]);
+
+  // Filter state
+  const [selectedChain, setSelectedChain] = useState<string | null>(null);
+  const [selectedProject, setSelectedProject] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState("6m");
 
   // Reconciliation state
   const [reconciliationStore, setReconciliationStore] = useState<ReconciliationStore | null>(null);
@@ -69,9 +76,8 @@ export default function ReconcilePage() {
     setHiddenTxKeys(new Set(getHiddenTxKeys(updatedStore)));
   }, [reconciliationStore]);
 
-  const handleSearch = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    
+  // Fetch transactions with current filters
+  const fetchWithFilters = useCallback(async () => {
     if (!walletAddress.trim()) {
       setError("Please enter a wallet address");
       return;
@@ -86,8 +92,10 @@ export default function ReconcilePage() {
 
     try {
       const result = await fetchTransactions(walletAddress.trim(), { 
-        since: '6m',
-        limit: 100 
+        since: dateRange === "all" ? "10y" : dateRange,
+        chain: selectedChain || undefined,
+        project: selectedProject || undefined,
+        limit: 200 
       });
       
       setTransactions(result.data.transactions);
@@ -95,6 +103,7 @@ export default function ReconcilePage() {
       setProjectDict(result.data.projectDict);
       setChainNames(result.data.chainNames);
       setSummary(result.data.summary);
+      setChainsWithData(result.data.chainsWithData || []);
       
       console.log('Discovery Response:', result);
     } catch (err) {
@@ -104,7 +113,22 @@ export default function ReconcilePage() {
     } finally {
       setLoading(false);
     }
+  }, [walletAddress, dateRange, selectedChain, selectedProject]);
+
+  const handleSearch = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    fetchWithFilters();
   };
+
+  // Build project names map from projectDict
+  const projectNames = Object.fromEntries(
+    Object.entries(projectDict).map(([id, info]) => [id, info.name])
+  );
+
+  // Get unique projects from summary
+  const availableProjects = summary?.byProject 
+    ? Object.keys(summary.byProject).filter(p => p !== 'other')
+    : [];
 
   return (
     <div className="min-h-screen bg-[#0D1117]">
@@ -154,6 +178,21 @@ export default function ReconcilePage() {
           </div>
         ) : summary ? (
           <div className="space-y-6">
+            {/* Filter Bar */}
+            <FilterBar
+              chains={chainsWithData}
+              chainNames={chainNames}
+              projects={availableProjects}
+              projectNames={projectNames}
+              selectedChain={selectedChain}
+              selectedProject={selectedProject}
+              dateRange={dateRange}
+              onChainChange={setSelectedChain}
+              onProjectChange={setSelectedProject}
+              onDateRangeChange={setDateRange}
+              onApplyFilters={fetchWithFilters}
+            />
+
             {/* Summary cards */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
@@ -206,7 +245,7 @@ export default function ReconcilePage() {
                 </button>
               </div>
             )}
-            
+
             {/* Transaction List */}
             <TransactionList 
               transactions={transactions}
