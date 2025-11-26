@@ -111,9 +111,9 @@ export default function ReconcilePage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               <div className="bg-[#0D1117] rounded-lg p-4">
                 <p className="text-[#8B949E] text-sm">Total</p>
-                <p className="text-2xl font-bold text-[#E6EDF3]">{summary.total_transactions}</p>
+                <p className="text-2xl font-bold text-[#E6EDF3]">{summary.totalTransactions}</p>
               </div>
-              {Object.entries(summary.by_protocol).map(([protocol, count]) => (
+              {Object.entries(summary.byProtocol || {}).map(([protocol, count]) => (
                 <div key={protocol} className="bg-[#0D1117] rounded-lg p-4">
                   <p className="text-[#8B949E] text-sm">{protocol}</p>
                   <p className="text-2xl font-bold text-[#58A6FF]">{count}</p>

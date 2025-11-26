@@ -7,36 +7,36 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export interface TransactionToken {
   symbol: string;
   amount: number;
-  usd_value: number;
+  usdValue: number;
   direction: 'in' | 'out';
 }
 
 export interface Transaction {
   // Identity
   id: string;
-  tx_hash: string;
-  log_index: number;
+  txHash: string;
+  logIndex: number;
   timestamp: number;
-  block_number: number;
+  blockNumber: number;
   
   // Classification
   protocol: 'uniswap_v3' | 'gmx_v2' | 'aave' | 'euler' | string;
   type: 'lp_mint' | 'lp_burn' | 'lp_collect' | 'perp_open' | 'perp_increase' | 'perp_decrease' | 'perp_close' | string;
   
   // Position linkage
-  position_key: string;
+  positionKey: string;
   
   // Token details
   tokens: TransactionToken[];
   
   // Value
-  usd_value: number;
-  realized_pnl: number | null;
+  usdValue: number;
+  realizedPnl: number | null;
   fees: number | null;
   
   // Reconciliation status
   status: 'unreconciled' | 'reconciled';
-  position_id: string | null;
+  positionId: string | null;
 }
 
 export interface TransactionsResponse {
@@ -54,13 +54,13 @@ export interface TransactionsResponse {
       page: number;
       limit: number;
       total: number;
-      total_pages: number;
-      has_more: boolean;
+      totalPages: number;
+      hasMore: boolean;
     };
     summary: {
-      total_transactions: number;
-      by_protocol: Record<string, number>;
-      by_type: Record<string, number>;
+      totalTransactions: number;
+      byProtocol: Record<string, number>;
+      byType: Record<string, number>;
     };
   };
 }
