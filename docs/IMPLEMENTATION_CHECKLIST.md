@@ -36,14 +36,14 @@ This approach had critical flaws:
 - Subgraph adapters moved to `services/adapters/` (kept for future enrichment)
 - Will be refactored to enrichment-only role
 
-### Step 6b: DeBank Discovery Refactor 🔄 IN PROGRESS
-- [ ] 6b.1 Create `services/transaction_discovery.py` - DeBank-based discovery
-- [ ] 6b.2 Fetch from DeBank `/user/history_list` across all chains
-- [ ] 6b.3 Return DeBank format directly (no conversion)
-- [ ] 6b.4 Update `/transactions` endpoint to use new discovery service
-- [ ] 6b.5 Add `chain` filter parameter to endpoint
-- [ ] 6b.6 Test: Verify ALL transactions visible (not just Uniswap/GMX)
-- [ ] 6b.7 Commit refactored architecture to GitHub
+### Step 6b: DeBank Discovery Refactor ✅ COMPLETE
+- [x] 6b.1 Create `services/discovery.py` - DeBank-based discovery
+- [x] 6b.2 Fetch from DeBank `/user/history_list` across all chains
+- [x] 6b.3 Return DeBank format directly (no conversion)
+- [x] 6b.4 Update `/transactions` endpoint to use new discovery service
+- [x] 6b.5 Add `chain` filter parameter to endpoint
+- [x] 6b.6 Test: Verified 39 transactions across 5 chains (eth, arb, base, op, bsc)
+- [x] 6b.7 Commit refactored architecture to GitHub
 
 ---
 
@@ -54,18 +54,18 @@ This approach had critical flaws:
 - [x] 7.2 Add navigation tab for Reconcile
 - [x] 7.3 Test: Navigate to page, see placeholder
 
-### Step 8: API Client ✅ (needs update after 6b)
+### Step 8: API Client ✅ COMPLETE
 - [x] 8.1 Add `fetchTransactions()` to `lib/api.ts`
 - [x] 8.2 Add TypeScript types for Transaction
 - [x] 8.3 Test: Console.log fetched transactions
-- [ ] 8.4 Update types to match DeBank format (after Step 6b)
+- [x] 8.4 Updated types to match DeBank format
 
-### Step 9: Transaction List Component ✅ (needs update after 6b)
+### Step 9: Transaction List Component ✅ COMPLETE
 - [x] 9.1 Create `TransactionList.tsx` - Display transactions
 - [x] 9.2 Create `TransactionRow.tsx` - Single transaction display
 - [x] 9.3 Add actions menu (••• button) - UI only, no logic yet
 - [x] 9.4 Test: See transactions rendered
-- [ ] 9.5 Update to display DeBank format fields (after Step 6b)
+- [x] 9.5 Updated to display DeBank format with chain badges and metadata
 
 ### Step 10: Filter Bar ⬜
 - [ ] 10.1 Create `FilterBar.tsx` - Date, chain, protocol, type filters
@@ -151,9 +151,16 @@ This approach had critical flaws:
 
 ## Current Task
 
-**Step 6b: DeBank Discovery Refactor 🔄 IN PROGRESS**
+**Step 6b, 8, 9: DeBank Discovery Refactor ✅ COMPLETE**
 
-Refactoring transaction discovery to use DeBank as source of truth for complete coverage.
+Successfully refactored transaction discovery to use DeBank as source of truth.
+
+**Test Results:**
+- 39 transactions discovered across 5 chains (eth: 14, arb: 11, base: 12, op: 1, bsc: 1)
+- Protocols detected: GMX V2 (11), Uniswap V3 (4), Socket (3+), 0x, Mayan
+- Chain badges and explorer links working
+
+**Next up:** Step 10 - Filter Bar (chain, protocol, date filters)
 
 ---
 

@@ -1,46 +1,24 @@
 """
-Transaction history API endpoint for reconciliation system.
-Fetches transactions from all registered protocol adapters.
+Transaction Discovery API endpoint for reconciliation system.
+
+Uses DeBank as source of truth for discovering ALL transactions
+across ALL chains. Protocol-specific subgraphs are used for 
+enrichment (pricing accuracy) when needed, not for discovery.
+
+Architecture:
+- Discovery: DeBank /user/history_list (complete coverage)
+- Enrichment: Subgraphs (on-demand, not in this endpoint)
 """
 
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
-from dataclasses import asdict
 import logging
 
-from backend.services.adapters import ProtocolRegistry, Transaction
+from backend.services.discovery import get_discovery_service, CHAIN_NAMES
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def transaction_to_dict(tx: Transaction) -> Dict[str, Any]:
-    """Convert Transaction dataclass to dict for JSON serialization"""
-    return {
-        "id": tx.id,
-        "txHash": tx.tx_hash,
-        "logIndex": tx.log_index,
-        "timestamp": tx.timestamp,
-        "blockNumber": tx.block_number,
-        "protocol": tx.protocol,
-        "type": tx.type,
-        "positionKey": tx.position_key,
-        "tokens": [
-            {
-                "symbol": t.symbol,
-                "amount": t.amount,
-                "usdValue": t.usd_value,
-                "direction": t.direction
-            }
-            for t in tx.tokens
-        ],
-        "usdValue": tx.usd_value,
-        "realizedPnl": tx.realized_pnl,
-        "fees": tx.fees,
-        "status": tx.status,
-        "positionId": tx.position_id
-    }
 
 
 @router.get("/wallet/{address}/transactions")
@@ -48,28 +26,32 @@ async def get_wallet_transactions(
     address: str,
     since: Optional[str] = Query(
         None, 
-        description="Start date (ISO format or days like '30d', '6m')"
+        description="Start date (ISO format or relative like '30d', '6m')"
     ),
     until: Optional[str] = Query(
         None,
         description="End date (ISO format), defaults to now"
     ),
-    protocol: Optional[str] = Query(
+    chain: Optional[str] = Query(
         None,
-        description="Filter by protocol (uniswap_v3, gmx_v2, euler)"
+        description="Filter by chain (eth, arb, op, base, matic, etc.)"
     ),
-    type: Optional[str] = Query(
+    project: Optional[str] = Query(
         None,
-        description="Filter by transaction type (lp_mint, perp_open, etc.)"
+        description="Filter by project/protocol (arb_gmx2, uniswap3, etc.)"
     ),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=200, description="Items per page")
 ) -> Dict[str, Any]:
     """
-    Get transaction history for a wallet.
+    Discover all transactions for a wallet.
     
-    Fetches transactions from all registered protocol adapters
-    and returns them in a standardized format for reconciliation.
+    Uses DeBank as the source of truth to ensure COMPLETE coverage
+    across all chains and protocols. This is the "bank sync" equivalent
+    from QuickBooks - it discovers everything before reconciliation.
+    
+    Returns DeBank's native format for maximum flexibility.
+    Token and project metadata are included for display purposes.
     
     Date formats:
     - ISO: "2024-01-01" or "2024-01-01T00:00:00Z"
@@ -85,37 +67,47 @@ async def get_wallet_transactions(
             # Default to 6 months
             since_dt = until_dt - timedelta(days=180)
         
-        # Get protocols to query
-        protocols = [protocol] if protocol else None
+        # Determine chains to query
+        chains = [chain] if chain else None  # None = all chains
         
-        # Fetch transactions from adapters
-        all_transactions = await ProtocolRegistry.fetch_all_transactions(
+        # Discover transactions via DeBank
+        discovery = await get_discovery_service()
+        result = await discovery.discover_transactions(
             wallet_address=address,
+            chains=chains,
             since=since_dt,
-            until=until_dt,
-            protocols=protocols
+            until=until_dt
         )
         
-        # Filter by type if specified
-        if type:
-            all_transactions = [t for t in all_transactions if t.type == type]
+        all_transactions = result["transactions"]
+        
+        # Filter by project if specified
+        if project:
+            all_transactions = [
+                tx for tx in all_transactions 
+                if tx.get("project_id") == project
+            ]
         
         # Calculate pagination
         total = len(all_transactions)
-        total_pages = (total + limit - 1) // limit
+        total_pages = (total + limit - 1) // limit if total > 0 else 1
         start_idx = (page - 1) * limit
         end_idx = start_idx + limit
         
         # Slice for current page
         page_transactions = all_transactions[start_idx:end_idx]
         
-        # Convert to dicts
-        transactions_data = [transaction_to_dict(tx) for tx in page_transactions]
+        # Rebuild summary after filtering
+        summary = _build_summary(all_transactions) if project else result["summary"]
         
         return {
             "status": "success",
             "data": {
-                "transactions": transactions_data,
+                "transactions": page_transactions,
+                "wallet": address.lower(),
+                "tokenDict": result["token_dict"],
+                "projectDict": result["project_dict"],
+                "chainNames": CHAIN_NAMES,
                 "pagination": {
                     "page": page,
                     "limit": limit,
@@ -126,24 +118,22 @@ async def get_wallet_transactions(
                 "filters": {
                     "since": since_dt.isoformat(),
                     "until": until_dt.isoformat(),
-                    "protocol": protocol,
-                    "type": type
+                    "chain": chain,
+                    "project": project
                 },
-                "summary": {
-                    "totalTransactions": total,
-                    "byProtocol": _count_by_field(all_transactions, "protocol"),
-                    "byType": _count_by_field(all_transactions, "type")
-                }
+                "summary": summary,
+                "chainsQueried": result["chains_queried"],
+                "chainsWithData": result["chains_with_data"]
             }
         }
         
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
     except Exception as e:
-        logger.exception(f"Error fetching transactions for {address}")
+        logger.exception(f"Error discovering transactions for {address}")
         raise HTTPException(
             status_code=500, 
-            detail={"error": "Failed to fetch transactions"}
+            detail={"error": "Failed to discover transactions", "message": str(e)}
         )
 
 
@@ -189,10 +179,20 @@ def _parse_date(date_str: str) -> datetime:
         raise ValueError(f"Invalid date format: {date_str}")
 
 
-def _count_by_field(transactions: List[Transaction], field: str) -> Dict[str, int]:
-    """Count transactions by a specific field"""
-    counts: Dict[str, int] = {}
+def _build_summary(transactions: List[Dict]) -> Dict[str, Any]:
+    """Build summary statistics from transactions"""
+    by_chain = {}
+    by_project = {}
+    
     for tx in transactions:
-        value = getattr(tx, field, "unknown")
-        counts[value] = counts.get(value, 0) + 1
-    return counts
+        chain = tx.get("chain", "unknown")
+        by_chain[chain] = by_chain.get(chain, 0) + 1
+        
+        project = tx.get("project_id") or "other"
+        by_project[project] = by_project.get(project, 0) + 1
+    
+    return {
+        "total": len(transactions),
+        "byChain": by_chain,
+        "byProject": by_project
+    }

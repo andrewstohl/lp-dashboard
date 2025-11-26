@@ -1,16 +1,22 @@
 "use client";
 
-import { type Transaction } from "@/lib/api";
+import { type Transaction, type TokenMeta, type ProjectMeta } from "@/lib/api";
 import { TransactionRow } from "./TransactionRow";
 
 interface TransactionListProps {
   transactions: Transaction[];
+  tokenDict: Record<string, TokenMeta>;
+  projectDict: Record<string, ProjectMeta>;
+  chainNames: Record<string, string>;
   title?: string;
   emptyMessage?: string;
 }
 
 export function TransactionList({ 
   transactions, 
+  tokenDict,
+  projectDict,
+  chainNames,
   title = "Transactions",
   emptyMessage = "No transactions found"
 }: TransactionListProps) {
@@ -32,8 +38,14 @@ export function TransactionList({
       
       {/* Transaction rows */}
       <div className="divide-y divide-[#21262D]">
-        {transactions.map((tx) => (
-          <TransactionRow key={tx.id} transaction={tx} />
+        {transactions.map((tx, idx) => (
+          <TransactionRow 
+            key={`${tx.id}-${idx}`} 
+            transaction={tx}
+            tokenDict={tokenDict}
+            projectDict={projectDict}
+            chainNames={chainNames}
+          />
         ))}
       </div>
     </div>

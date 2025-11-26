@@ -1,30 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import { type Transaction, formatCurrency } from "@/lib/api";
+import { type Transaction, type TokenMeta, type ProjectMeta, formatCurrency } from "@/lib/api";
 import { MoreHorizontal, ExternalLink, Plus, FolderPlus } from "lucide-react";
 
 interface TransactionRowProps {
   transaction: Transaction;
+  tokenDict: Record<string, TokenMeta>;
+  projectDict: Record<string, ProjectMeta>;
+  chainNames: Record<string, string>;
 }
 
-// Protocol display names
-const PROTOCOL_NAMES: Record<string, string> = {
-  uniswap_v3: "Uniswap V3",
-  gmx_v2: "GMX V2",
-  aave: "AAVE",
-  euler: "Euler",
+// Chain explorer URLs
+const EXPLORER_URLS: Record<string, string> = {
+  eth: "https://etherscan.io/tx/",
+  arb: "https://arbiscan.io/tx/",
+  op: "https://optimistic.etherscan.io/tx/",
+  base: "https://basescan.org/tx/",
+  matic: "https://polygonscan.com/tx/",
+  bsc: "https://bscscan.com/tx/",
+  avax: "https://snowtrace.io/tx/",
+  ftm: "https://ftmscan.com/tx/",
 };
 
-// Transaction type display names and colors
-const TYPE_CONFIG: Record<string, { label: string; color: string }> = {
-  lp_mint: { label: "Add Liquidity", color: "#3FB950" },
-  lp_burn: { label: "Remove Liquidity", color: "#F85149" },
-  lp_collect: { label: "Collect Fees", color: "#A371F7" },
-  perp_open: { label: "Open Position", color: "#3FB950" },
-  perp_increase: { label: "Increase", color: "#58A6FF" },
-  perp_decrease: { label: "Decrease", color: "#F0883E" },
-  perp_close: { label: "Close Position", color: "#F85149" },
+// Chain badge colors
+const CHAIN_COLORS: Record<string, string> = {
+  eth: "#627EEA",
+  arb: "#28A0F0",
+  op: "#FF0420",
+  base: "#0052FF",
+  matic: "#8247E5",
+  bsc: "#F0B90B",
+  avax: "#E84142",
+  ftm: "#1969FF",
 };
 
 function formatDate(timestamp: number): string {
@@ -46,75 +54,148 @@ function shortenHash(hash: string): string {
   return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
 }
 
-export function TransactionRow({ transaction }: TransactionRowProps) {
+function shortenAddress(addr: string): string {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
+export function TransactionRow({ 
+  transaction, 
+  tokenDict, 
+  projectDict,
+  chainNames 
+}: TransactionRowProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   
-  const typeConfig = TYPE_CONFIG[transaction.type] || { 
-    label: transaction.type, 
-    color: "#8B949E" 
+  const tx = transaction.tx;
+  const chain = transaction.chain;
+  const chainName = chainNames[chain] || chain.toUpperCase();
+  const chainColor = CHAIN_COLORS[chain] || "#8B949E";
+  const explorerUrl = EXPLORER_URLS[chain] || "https://etherscan.io/tx/";
+  
+  // Get project info
+  const project = transaction.project_id ? projectDict[transaction.project_id] : null;
+  const projectName = project?.name || transaction.cate_id || "Unknown";
+  
+  // Build token summary from sends and receives
+  const buildTokenSummary = () => {
+    const parts: string[] = [];
+    
+    // Receives (tokens coming in)
+    for (const recv of transaction.receives) {
+      const token = tokenDict[recv.token_id];
+      const symbol = token?.symbol || shortenAddress(recv.token_id);
+      const amount = recv.amount;
+      if (amount > 0.0001) {
+        parts.push(`+${amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${symbol}`);
+      }
+    }
+    
+    // Sends (tokens going out)
+    for (const send of transaction.sends) {
+      const token = tokenDict[send.token_id];
+      const symbol = token?.symbol || shortenAddress(send.token_id);
+      const amount = send.amount;
+      if (amount > 0.0001) {
+        parts.push(`-${amount.toLocaleString(undefined, { maximumFractionDigits: 4 })} ${symbol}`);
+      }
+    }
+    
+    return parts.length > 0 ? parts.join(", ") : tx.name || "Contract Interaction";
   };
   
-  const protocolName = PROTOCOL_NAMES[transaction.protocol] || transaction.protocol;
+  // Calculate approximate USD value
+  const calculateUsdValue = () => {
+    let total = 0;
+    
+    for (const recv of transaction.receives) {
+      const token = tokenDict[recv.token_id];
+      if (token?.price) {
+        total += recv.amount * token.price;
+      }
+    }
+    
+    for (const send of transaction.sends) {
+      const token = tokenDict[send.token_id];
+      if (token?.price) {
+        total -= send.amount * token.price;
+      }
+    }
+    
+    return total;
+  };
   
-  // Build token summary string
-  const tokenSummary = transaction.tokens
-    .map(t => `${t.amount.toFixed(2)} ${t.symbol}`)
-    .join(" + ");
-
-  // Determine if this is a "positive" or "negative" value transaction
-  const isPositive = ["lp_mint", "perp_open", "perp_increase", "lp_collect"].includes(transaction.type);
-
+  const tokenSummary = buildTokenSummary();
+  const usdValue = calculateUsdValue();
+  const hasValue = Math.abs(usdValue) > 0.01;
+  const isPositive = usdValue >= 0;
+  
+  // Determine action type for display
+  const actionName = tx.name || transaction.cate_id || "Transaction";
+  
   return (
     <div className="px-4 py-3 hover:bg-[#1C2128] transition-colors relative">
       <div className="flex items-start justify-between gap-4">
-        {/* Left: Date, Type, Details */}
+        {/* Left: Date, Chain, Action, Details */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2 mb-1 flex-wrap">
             {/* Date */}
             <span className="text-[#8B949E] text-sm">
-              {formatDate(transaction.timestamp)}
+              {formatDate(transaction.time_at)}
             </span>
             <span className="text-[#30363D]">•</span>
-            {/* Type badge */}
+            {/* Chain badge */}
             <span 
               className="text-xs font-medium px-2 py-0.5 rounded-full"
               style={{ 
-                backgroundColor: `${typeConfig.color}20`,
-                color: typeConfig.color 
+                backgroundColor: `${chainColor}20`,
+                color: chainColor 
               }}
             >
-              {typeConfig.label}
+              {chainName}
+            </span>
+            {/* Action badge */}
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[#21262D] text-[#E6EDF3]">
+              {actionName}
             </span>
           </div>
           
           {/* Token summary */}
           <p className="text-[#E6EDF3] font-medium truncate">
-            {tokenSummary || "—"}
+            {tokenSummary}
           </p>
           
-          {/* Protocol and hash */}
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-[#8B949E] text-xs">{protocolName}</span>
-            <span className="text-[#30363D]">•</span>
+          {/* Project and hash */}
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {project && (
+              <>
+                <span className="text-[#58A6FF] text-xs">{projectName}</span>
+                <span className="text-[#30363D]">•</span>
+              </>
+            )}
             <span className="text-[#8B949E] text-xs font-mono">
-              {shortenHash(transaction.txHash)}
+              {shortenHash(transaction.id)}
             </span>
+            {transaction.other_addr && (
+              <>
+                <span className="text-[#30363D]">•</span>
+                <span className="text-[#8B949E] text-xs">
+                  → {shortenAddress(transaction.other_addr)}
+                </span>
+              </>
+            )}
           </div>
         </div>
         
         {/* Right: Value and menu */}
         <div className="flex items-center gap-3">
           {/* USD Value */}
-          <div className="text-right">
-            <p className={`font-semibold ${isPositive ? "text-[#E6EDF3]" : "text-[#F85149]"}`}>
-              {isPositive ? "" : "-"}{formatCurrency(Math.abs(transaction.usdValue))}
-            </p>
-            {transaction.realizedPnl !== null && (
-              <p className={`text-xs ${transaction.realizedPnl >= 0 ? "text-[#3FB950]" : "text-[#F85149]"}`}>
-                P&L: {transaction.realizedPnl >= 0 ? "+" : ""}{formatCurrency(transaction.realizedPnl)}
+          {hasValue && (
+            <div className="text-right">
+              <p className={`font-semibold ${isPositive ? "text-[#3FB950]" : "text-[#F85149]"}`}>
+                {isPositive ? "+" : ""}{formatCurrency(usdValue)}
               </p>
-            )}
-          </div>
+            </div>
+          )}
           
           {/* Actions menu button */}
           <button
@@ -153,14 +234,14 @@ export function TransactionRow({ transaction }: TransactionRowProps) {
             </button>
             <div className="border-t border-[#30363D] my-1" />
             <a
-              href={`https://arbiscan.io/tx/${transaction.txHash}`}
+              href={`${explorerUrl}${transaction.id}`}
               target="_blank"
               rel="noopener noreferrer"
               className="w-full px-4 py-2 text-left text-[#8B949E] hover:bg-[#21262D] flex items-center gap-2"
               onClick={() => setMenuOpen(false)}
             >
               <ExternalLink className="w-4 h-4" />
-              View on Explorer
+              View on {chainName} Explorer
             </a>
           </div>
         </>

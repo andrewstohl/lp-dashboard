@@ -1,54 +1,83 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 // =============================================================================
-// Transaction Types (for Reconciliation)
+// Transaction Types (DeBank format for Discovery)
 // =============================================================================
 
-export interface TransactionToken {
-  symbol: string;
+// Token transfer within a transaction
+export interface TokenTransfer {
   amount: number;
-  usdValue: number;
-  direction: 'in' | 'out';
+  token_id: string;
+  from_addr?: string;
+  to_addr?: string;
 }
 
-export interface Transaction {
-  // Identity
+// Transaction details from DeBank
+export interface TransactionTx {
   id: string;
-  txHash: string;
-  logIndex: number;
-  timestamp: number;
-  blockNumber: number;
-  
-  // Classification
-  protocol: 'uniswap_v3' | 'gmx_v2' | 'aave' | 'euler' | string;
-  type: 'lp_mint' | 'lp_burn' | 'lp_collect' | 'perp_open' | 'perp_increase' | 'perp_decrease' | 'perp_close' | string;
-  
-  // Position linkage
-  positionKey: string;
-  
-  // Token details
-  tokens: TransactionToken[];
-  
-  // Value
-  usdValue: number;
-  realizedPnl: number | null;
-  fees: number | null;
-  
-  // Reconciliation status
-  status: 'unreconciled' | 'reconciled';
-  positionId: string | null;
+  name: string;
+  from_addr: string;
+  to_addr: string;
+  status: number;
+  value: number;
+  usd_gas_fee?: number;
 }
 
+// Raw transaction from DeBank discovery
+export interface Transaction {
+  id: string;              // tx hash
+  chain: string;           // eth, arb, op, base, etc.
+  time_at: number;         // unix timestamp
+  project_id: string | null;  // arb_gmx2, uniswap3, etc.
+  cate_id: string | null;  // category: send, receive, etc.
+  tx: TransactionTx;
+  sends: TokenTransfer[];
+  receives: TokenTransfer[];
+  is_scam: boolean;
+  other_addr: string;
+  token_approve?: {
+    spender: string;
+    token_id: string;
+    value: number;
+  } | null;
+}
+
+// Token metadata from DeBank
+export interface TokenMeta {
+  id: string;
+  chain: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  price: number;
+  logo_url: string | null;
+  is_verified: boolean | null;
+  is_scam: boolean;
+}
+
+// Project/Protocol metadata from DeBank
+export interface ProjectMeta {
+  id: string;
+  chain: string;
+  name: string;
+  logo_url: string;
+  site_url: string;
+}
+
+// API Response for transactions
 export interface TransactionsResponse {
   status: 'success';
   data: {
     transactions: Transaction[];
     wallet: string;
+    tokenDict: Record<string, TokenMeta>;
+    projectDict: Record<string, ProjectMeta>;
+    chainNames: Record<string, string>;
     filters: {
       since: string;
       until: string;
-      protocol: string | null;
-      type: string | null;
+      chain: string | null;
+      project: string | null;
     };
     pagination: {
       page: number;
@@ -58,23 +87,25 @@ export interface TransactionsResponse {
       hasMore: boolean;
     };
     summary: {
-      totalTransactions: number;
-      byProtocol: Record<string, number>;
-      byType: Record<string, number>;
+      total: number;
+      byChain: Record<string, number>;
+      byProject: Record<string, number>;
     };
+    chainsQueried: string[];
+    chainsWithData: string[];
   };
 }
 
 export interface FetchTransactionsParams {
-  since?: string;  // ISO date or relative like "30d", "6m"
-  until?: string;  // ISO date
-  protocol?: string;
-  type?: string;
+  since?: string;   // ISO date or relative like "30d", "6m"
+  until?: string;   // ISO date
+  chain?: string;   // eth, arb, op, base, etc.
+  project?: string; // arb_gmx2, uniswap3, etc.
   page?: number;
   limit?: number;
 }
 
-// Fetch transactions for reconciliation
+// Fetch transactions for reconciliation (uses DeBank discovery)
 export async function fetchTransactions(
   address: string, 
   params: FetchTransactionsParams = {}
@@ -83,8 +114,8 @@ export async function fetchTransactions(
   
   if (params.since) searchParams.set('since', params.since);
   if (params.until) searchParams.set('until', params.until);
-  if (params.protocol) searchParams.set('protocol', params.protocol);
-  if (params.type) searchParams.set('type', params.type);
+  if (params.chain) searchParams.set('chain', params.chain);
+  if (params.project) searchParams.set('project', params.project);
   if (params.page) searchParams.set('page', params.page.toString());
   if (params.limit) searchParams.set('limit', params.limit.toString());
   

@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 26, 2025 (Phase 2.0a Architecture Revision - DeBank Discovery)  
+> **Last Updated:** November 26, 2025 (Phase 2.0a+b Complete: DeBank Discovery + Reconcile UI Steps 7-9)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -439,8 +439,8 @@ This approach:
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 2.0a | Backend - Transaction fetching APIs | ⚠️ Refactoring to DeBank |
-| 2.0b | Frontend - Reconcile page UI | In Progress |
+| 2.0a | Backend - Transaction fetching APIs | ✅ Complete (DeBank Discovery) |
+| 2.0b | Frontend - Reconcile page UI | In Progress (Steps 7-9 done) |
 | 2.0c | Allocation logic & localStorage persistence | Pending |
 | 2.0d | Smart suggestions (temporal, token matching) | Pending |
 | 2.0e | Ledger page refactor (Current/Historical tabs) | Pending |
@@ -455,12 +455,21 @@ Original adapter-based approach had critical flaws:
 - Only discovered transactions on networks with configured subgraph URLs
 - Missing transactions unacceptable for enterprise portfolio analysis
 
-**New Two-Layer Architecture:**
+**New Two-Layer Architecture (QuickBooks-inspired):**
 - **Layer 1 (Discovery):** DeBank `/user/history_list` → ALL transactions, ALL chains
 - **Layer 2 (Enrichment):** Protocol subgraphs → Accurate pricing on-demand
 
 **Key Decision:** Use DeBank's transaction format directly (no conversion) to reduce code bloat.
 Reconciliation data stored as separate overlay keyed by `${chain}:${txHash}`.
+
+**Files Created:**
+- `backend/services/discovery.py` - DeBank-based transaction discovery (256 lines)
+- Refactored `backend/app/api/v1/transactions.py` to use discovery service
+
+**Test Results (30 days, test wallet):**
+- 39 transactions discovered across 5 chains
+- Chains: eth (14), arb (11), base (12), op (1), bsc (1)
+- Protocols: GMX V2 (11), Uniswap V3 (4), Socket (3+), 0x, Mayan
 
 Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment role.
 
