@@ -5,6 +5,7 @@ import { Wallet, Search, FileCheck2, Eye, EyeOff } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
 import { FilterBar } from "@/components/FilterBar";
+import { ReconcileSummary } from "@/components/ReconcileSummary";
 import { 
   fetchTransactions, 
   type Transaction, 
@@ -193,19 +194,13 @@ export default function ReconcilePage() {
               onApplyFilters={fetchWithFilters}
             />
 
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-              <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
-                <p className="text-[#8B949E] text-sm">Total Transactions</p>
-                <p className="text-2xl font-bold text-[#E6EDF3]">{summary.total}</p>
-              </div>
-              {Object.entries(summary.byChain || {}).map(([chain, count]) => (
-                <div key={chain} className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
-                  <p className="text-[#8B949E] text-sm">{chainNames[chain] || chain}</p>
-                  <p className="text-2xl font-bold text-[#58A6FF]">{count}</p>
-                </div>
-              ))}
-            </div>
+            {/* Summary Stats */}
+            <ReconcileSummary
+              transactions={transactions}
+              tokenDict={tokenDict}
+              chainNames={chainNames}
+              hiddenTxKeys={hiddenTxKeys}
+            />
 
             {/* Protocol breakdown */}
             {summary.byProject && Object.keys(summary.byProject).length > 0 && (
