@@ -93,6 +93,13 @@ export interface TransactionsResponse {
     };
     chainsQueried: string[];
     chainsWithData: string[];
+    cache?: {
+      status: 'full_fetch' | 'incremental_sync';
+      new_transactions: number;
+      total_cached: number;
+      oldest_date: string | null;
+      newest_date: string | null;
+    };
   };
 }
 
@@ -103,6 +110,7 @@ export interface FetchTransactionsParams {
   project?: string; // arb_gmx2, uniswap3, etc.
   page?: number;
   limit?: number;
+  forceRefresh?: boolean;  // Clear cache and refetch
 }
 
 // Fetch transactions for reconciliation (uses DeBank discovery)
@@ -118,6 +126,7 @@ export async function fetchTransactions(
   if (params.project) searchParams.set('project', params.project);
   if (params.page) searchParams.set('page', params.page.toString());
   if (params.limit) searchParams.set('limit', params.limit.toString());
+  if (params.forceRefresh) searchParams.set('force_refresh', 'true');
   
   const queryString = searchParams.toString();
   const url = `${API_BASE}/api/v1/wallet/${address}/transactions${queryString ? `?${queryString}` : ''}`;

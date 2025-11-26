@@ -21,6 +21,7 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime
 
 from backend.core.config import settings
+from backend.services.transaction_cache import get_cache, TransactionCache
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +96,12 @@ class TransactionDiscoveryService:
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
         page_count: int = 20,
-        max_pages: int = 100
+        max_pages: int = 100,
+        force_refresh: bool = False
     ) -> Dict[str, Any]:
         """
         Discover all transactions for a wallet across all chains.
+        Uses caching for fast subsequent loads with incremental sync.
         
         Args:
             wallet_address: The wallet to query
@@ -107,45 +110,115 @@ class TransactionDiscoveryService:
             until: Only include transactions before this time
             page_count: Items per page (max 20)
             max_pages: Max pages to fetch total
+            force_refresh: If True, clear cache and refetch everything
             
         Returns:
-            Dict with:
-            - transactions: List of raw DeBank transactions
-            - token_dict: Token metadata
-            - project_dict: Project/protocol metadata
-            - chains_queried: Which chains were searched
-            - chains_with_data: Chains that had transactions
-            - summary: Counts by chain and project
+            Dict with transactions, metadata, and cache info
         """
         wallet = wallet_address.lower()
+        cache = get_cache(wallet)
+        
+        # Handle force refresh
+        if force_refresh:
+            cache.clear_cache()
+            logger.info(f"Force refresh: cleared cache for {wallet[:10]}...")
         
         # First, get all chains this wallet has used
         used_chains = await self.get_used_chains(wallet)
         used_chain_ids = [c["id"] for c in used_chains]
-        
-        # Filter to specific chains if requested
         chains_to_query = chains if chains else used_chain_ids
         
         since_ts = int(since.timestamp()) if since else None
         until_ts = int(until.timestamp()) if until else None
         
-        # Use all_history_list for cross-chain discovery
-        result = await self._fetch_all_history(
-            wallet, chains_to_query, since_ts, until_ts,
-            page_count, max_pages
-        )
+        # Check cache status
+        cached_count = cache.get_transaction_count()
+        latest_cached_ts = cache.get_latest_timestamp()
+        
+        if cached_count > 0 and latest_cached_ts and not force_refresh:
+            # Incremental sync: only fetch transactions newer than cache
+            logger.info(f"Cache hit: {cached_count} txs, syncing since {latest_cached_ts}")
+            
+            # Fetch only new transactions (since latest cached)
+            new_result = await self._fetch_all_history(
+                wallet, chains_to_query, 
+                since_ts=latest_cached_ts,  # Start from last cached
+                until_ts=until_ts,
+                page_count=page_count, 
+                max_pages=max_pages
+            )
+            
+            # Save new transactions to cache
+            if new_result["transactions"]:
+                cache.save_transactions(new_result["transactions"])
+                # Update metadata
+                cache.save_metadata("token_dict", new_result["token_dict"])
+                cache.save_metadata("project_dict", new_result["project_dict"])
+                logger.info(f"Added {len(new_result['transactions'])} new transactions to cache")
+            
+            # Load all from cache with filters
+            all_transactions = cache.load_transactions(
+                since_ts=since_ts,
+                until_ts=until_ts,
+                chain=chains[0] if chains and len(chains) == 1 else None
+            )
+            
+            # Load metadata from cache
+            token_dict = cache.load_metadata("token_dict") or {}
+            project_dict = cache.load_metadata("project_dict") or {}
+            token_dict.update(new_result.get("token_dict", {}))
+            project_dict.update(new_result.get("project_dict", {}))
+            
+            cache_status = "incremental_sync"
+            new_tx_count = len(new_result["transactions"])
+            
+        else:
+            # Full fetch (no cache or force refresh)
+            logger.info(f"Full fetch for {wallet[:10]}... (no cache)")
+            
+            result = await self._fetch_all_history(
+                wallet, chains_to_query, since_ts, until_ts,
+                page_count, max_pages
+            )
+            
+            # Save everything to cache
+            cache.save_transactions(result["transactions"])
+            cache.save_metadata("token_dict", result["token_dict"])
+            cache.save_metadata("project_dict", result["project_dict"])
+            cache.save_metadata("chain_names", self.chain_names)
+            
+            all_transactions = result["transactions"]
+            token_dict = result["token_dict"]
+            project_dict = result["project_dict"]
+            cache_status = "full_fetch"
+            new_tx_count = len(all_transactions)
+        
+        # Filter by chain if multiple specified
+        if chains and len(chains) > 1:
+            all_transactions = [
+                tx for tx in all_transactions
+                if tx.get("chain") in chains
+            ]
         
         # Build summary
-        summary = self._build_summary(result["transactions"])
+        summary = self._build_summary(all_transactions)
+        cache_stats = cache.get_cache_stats()
         
         return {
-            "transactions": result["transactions"],
-            "token_dict": result["token_dict"],
-            "project_dict": result["project_dict"],
+            "transactions": all_transactions,
+            "token_dict": token_dict,
+            "project_dict": project_dict,
             "chains_queried": chains_to_query,
             "chains_with_data": list(summary["byChain"].keys()),
             "chain_names": self.chain_names,
-            "summary": summary
+            "summary": summary,
+            "cache": {
+                "status": cache_status,
+                "new_transactions": new_tx_count,
+                "total_cached": cache_stats["total_transactions"],
+                "oldest_date": cache_stats["oldest_date"],
+                "newest_date": cache_stats["newest_date"],
+            }
         }
 
     async def _fetch_all_history(

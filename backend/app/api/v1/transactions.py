@@ -40,6 +40,10 @@ async def get_wallet_transactions(
         None,
         description="Filter by project/protocol (arb_gmx2, uniswap3, etc.)"
     ),
+    force_refresh: bool = Query(
+        False,
+        description="Force full refresh, clearing cache"
+    ),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=200, description="Items per page")
 ) -> Dict[str, Any]:
@@ -76,7 +80,8 @@ async def get_wallet_transactions(
             wallet_address=address,
             chains=chains,
             since=since_dt,
-            until=until_dt
+            until=until_dt,
+            force_refresh=force_refresh
         )
         
         all_transactions = result["transactions"]
@@ -123,7 +128,8 @@ async def get_wallet_transactions(
                 },
                 "summary": summary,
                 "chainsQueried": result["chains_queried"],
-                "chainsWithData": result["chains_with_data"]
+                "chainsWithData": result["chains_with_data"],
+                "cache": result.get("cache", {})
             }
         }
         

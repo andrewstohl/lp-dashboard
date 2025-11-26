@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Wallet, Search, FileCheck2, Eye, EyeOff } from "lucide-react";
+import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
 import { FilterBar } from "@/components/FilterBar";
@@ -37,6 +37,7 @@ export default function ReconcilePage() {
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState<TransactionsResponse['data']['summary'] | null>(null);
   const [chainsWithData, setChainsWithData] = useState<string[]>([]);
+  const [cacheStatus, setCacheStatus] = useState<TransactionsResponse['data']['cache'] | null>(null);
 
   // Filter state
   const [selectedChain, setSelectedChain] = useState<string | null>(null);
@@ -78,7 +79,7 @@ export default function ReconcilePage() {
   }, [reconciliationStore]);
 
   // Fetch transactions with current filters
-  const fetchWithFilters = useCallback(async () => {
+  const fetchWithFilters = useCallback(async (forceRefresh: boolean = false) => {
     if (!walletAddress.trim()) {
       setError("Please enter a wallet address");
       return;
@@ -96,7 +97,8 @@ export default function ReconcilePage() {
         since: dateRange === "all" ? "10y" : dateRange,
         chain: selectedChain || undefined,
         project: selectedProject || undefined,
-        limit: 200 
+        limit: 200,
+        forceRefresh
       });
       
       setTransactions(result.data.transactions);
@@ -105,12 +107,14 @@ export default function ReconcilePage() {
       setChainNames(result.data.chainNames);
       setSummary(result.data.summary);
       setChainsWithData(result.data.chainsWithData || []);
+      setCacheStatus(result.data.cache || null);
       
       console.log('Discovery Response:', result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch transactions");
       setTransactions([]);
       setSummary(null);
+      setCacheStatus(null);
     } finally {
       setLoading(false);
     }
@@ -118,7 +122,11 @@ export default function ReconcilePage() {
 
   const handleSearch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    fetchWithFilters();
+    fetchWithFilters(false);
+  };
+
+  const handleForceRefresh = () => {
+    fetchWithFilters(true);
   };
 
   // Build project names map from projectDict
