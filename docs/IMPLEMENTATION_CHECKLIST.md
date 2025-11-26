@@ -49,10 +49,10 @@
 
 ## Phase 2.0b: Frontend - Reconcile Page UI
 
-### Step 7: Page Setup ⬜
-- [ ] 7.1 Create `/app/reconcile/page.tsx` - Basic page shell
-- [ ] 7.2 Add navigation tab for Reconcile
-- [ ] 7.3 Test: Navigate to page, see placeholder
+### Step 7: Page Setup ✅
+- [x] 7.1 Create `/app/reconcile/page.tsx` - Basic page shell
+- [x] 7.2 Add navigation tab for Reconcile
+- [x] 7.3 Test: Navigate to page, see placeholder
 
 ### Step 8: API Client ⬜
 - [ ] 8.1 Add `fetchTransactions()` to `lib/api.ts`
@@ -137,9 +137,9 @@
 
 ## Current Task
 
-**Phase 2.0a COMPLETE ✅**
+**Step 7 COMPLETE ✅**
 
-**Next up:** Step 7 - Page Setup (Phase 2.0b: Frontend - Reconcile Page UI)
+**Next up:** Step 8 - API Client (Phase 2.0b: Frontend - Reconcile Page UI)
 
 ---
 
