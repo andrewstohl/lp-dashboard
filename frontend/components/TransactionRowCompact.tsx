@@ -81,24 +81,35 @@ export function TransactionRowCompact({
   const buildTokenSummary = () => {
     const parts: string[] = [];
     
+    // Receives first (tokens in)
     for (const recv of transaction.receives || []) {
       const token = tokenDict[recv.token_id];
-      const symbol = token?.symbol || recv.token_id?.slice(0, 6) || "?";
+      const symbol = token?.symbol || "???";
+      // Skip spam-looking tokens
+      if (symbol.length > 20 || symbol.includes("x.com") || symbol.includes(".com")) continue;
       if (recv.amount > 0.0001) {
-        parts.push(`+${recv.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${symbol}`);
+        const formatted = recv.amount >= 1000 
+          ? `${(recv.amount / 1000).toFixed(1)}k` 
+          : recv.amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        parts.push(`+${formatted} ${symbol}`);
       }
     }
     
+    // Sends (tokens out)
     for (const send of transaction.sends || []) {
       const token = tokenDict[send.token_id];
-      const symbol = token?.symbol || send.token_id?.slice(0, 6) || "?";
+      const symbol = token?.symbol || "???";
+      if (symbol.length > 20 || symbol.includes("x.com") || symbol.includes(".com")) continue;
       if (send.amount > 0.0001) {
-        parts.push(`-${send.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${symbol}`);
+        const formatted = send.amount >= 1000 
+          ? `${(send.amount / 1000).toFixed(1)}k` 
+          : send.amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
+        parts.push(`-${formatted} ${symbol}`);
       }
     }
     
-    if (parts.length === 0) return tx?.name || "Contract call";
-    if (parts.length > 2) return `${parts.slice(0, 2).join(", ")} +${parts.length - 2} more`;
+    if (parts.length === 0) return "-";
+    if (parts.length > 3) return `${parts.slice(0, 3).join(", ")}...`;
     return parts.join(", ");
   };
   
@@ -152,9 +163,9 @@ export function TransactionRowCompact({
         <span className="text-[#58A6FF] text-sm truncate block">{projectName}</span>
       </div>
       
-      {/* Details - flex-1 */}
+      {/* Tokens - flex-1 */}
       <div className="flex-1 min-w-0">
-        <span className="text-[#8B949E] text-sm truncate block" title={tokenSummary}>
+        <span className="text-[#E6EDF3] text-sm truncate block" title={tokenSummary}>
           {tokenSummary}
         </span>
       </div>

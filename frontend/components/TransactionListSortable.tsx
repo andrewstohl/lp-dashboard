@@ -222,7 +222,7 @@ export function TransactionListSortable({
           className="w-28"
         />
         <span className="flex-1 text-xs font-medium uppercase tracking-wide text-[#8B949E]">
-          Details
+          Tokens
         </span>
         <SortableHeader 
           label="Amount" 
