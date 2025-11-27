@@ -1,8 +1,8 @@
 # Build Page Implementation Plan
 
-> **Version:** 1.0  
+> **Version:** 1.1  
 > **Created:** November 27, 2025  
-> **Status:** In Progress (Phase 3 Complete, Phase 4 Starting)
+> **Status:** Phases 1-6 Complete, Phase 7 (Persistence) Next
 
 ---
 
@@ -94,7 +94,7 @@ The Build page is a three-column workflow for constructing portfolios from raw t
 | 5.2 | Position expansion (show txs) | ✅ Done |
 | 5.3 | Position actions (rename, unlink) | ⏸️ Deferred to Phase 7 |
 
-### Phase 6: Strategies Column UI 🔄 IN PROGRESS
+### Phase 6: Strategies Column UI ✅ COMPLETE
 
 | Step | Description | Status |
 |------|-------------|--------|
@@ -104,7 +104,7 @@ The Build page is a three-column workflow for constructing portfolios from raw t
 | 6.4 | Strategy expansion | ✅ Done |
 | 6.5 | Strategy actions (delete) | ✅ Done |
 
-### Phase 7: Persistence
+### Phase 7: Persistence 🔄 NEXT
 
 | Step | Description | Status |
 |------|-------------|--------|

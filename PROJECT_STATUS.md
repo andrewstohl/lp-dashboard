@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 27, 2025 (Build Page Phase 1-3 Complete, Phase 4 Starting)  
+> **Last Updated:** November 27, 2025 (Build Page Phases 1-6 Complete, Phase 7 Next)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -550,10 +550,10 @@ Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment 
 | 1 | 1.1-1.3 | Foundation (page, prices, caching) | ✅ Complete |
 | 2 | 2.1-2.3 | Transaction discovery & MVT filtering | ✅ Complete |
 | 3 | 3.1-3.4 | Position discovery & building | ✅ Complete |
-| 4 | 4.1-4.2 | Transactions column UI | 🔄 In Progress |
-| 5 | 5.1-5.3 | Positions column UI | ❌ Not started |
-| 6 | 6.1-6.5 | Strategies column UI | ❌ Not started |
-| 7 | 7.1-7.3 | Persistence | ❌ Not started |
+| 4 | 4.1-4.2 | Transactions column UI | ✅ Complete |
+| 5 | 5.1-5.3 | Positions column UI | ✅ Complete |
+| 6 | 6.1-6.5 | Strategies column UI | ✅ Complete |
+| 7 | 7.1-7.3 | Persistence | 🔄 Next |
 | 8 | 8.1-8.3 | Integration & polish | ❌ Not started |
 
 ### Current Results (Test Wallet, 6 months)
@@ -577,10 +577,11 @@ Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment 
 - `backend/services/discovery.py` - DeBank discovery (364 lines)
 
 **Frontend:**
-- `frontend/app/build/page.tsx` - Main Build page (364 lines)
+- `frontend/app/build/page.tsx` - Main Build page (432 lines)
 - `frontend/components/build/TransactionsColumn.tsx` - Left column (290 lines)
 - `frontend/components/build/PositionsColumn.tsx` - Middle column (429 lines)
 - `frontend/components/build/StrategiesColumn.tsx` - Right column (217 lines)
+- `frontend/components/build/CreateStrategyModal.tsx` - Strategy creation (301 lines)
 
 ### API Endpoints
 
