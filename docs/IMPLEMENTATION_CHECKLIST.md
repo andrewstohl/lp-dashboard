@@ -92,11 +92,12 @@ This approach had critical flaws:
 - [x] 12.6 Added "Show Hidden" toggle to UI
 - [ ] 12.7 Add position and strategy fields (future steps)
 
-### Step 13: Position Management ⬜
-- [ ] 13.1 Create `lib/reconciliation/positions.ts` - Position CRUD
-- [ ] 13.2 Add auto-grouping by positionKey
-- [ ] 13.3 Create Position modal UI
-- [ ] 13.4 Test: Create position from transactions
+### Step 13: Position Management ✅ COMPLETE
+- [x] 13.1 Create `lib/reconciliation/positions.ts` - Position CRUD
+- [x] 13.2 Add auto-grouping by positionKey (suggestPositions function)
+- [x] 13.3 Create Position modal UI (CreatePositionModal.tsx)
+- [x] 13.4 Create Position suggestions panel (PositionSuggestionsPanel.tsx)
+- [x] 13.5 Test: Create position from suggestion on reconcile page
 
 ### Step 14: Strategy Management ⬜
 - [ ] 14.1 Create `lib/reconciliation/strategies.ts` - Strategy CRUD
@@ -179,7 +180,7 @@ Added ReconcileSummary component with:
 - Result: First load ~60s, subsequent loads ~1s (60x faster)
 - Files: `backend/services/transaction_cache.py`
 
-**Next up:** Phase 2.0c - Step 13: Position Management
+**Next up:** Phase 2.0c - Step 14: Strategy Management
 
 ---
 
