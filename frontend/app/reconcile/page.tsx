@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database } from "lucide-react";
+import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database, LayoutGrid, List } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionListSortable } from "@/components/TransactionListSortable";
 import { FilterBar } from "@/components/FilterBar";
 import { QuickFilters } from "@/components/QuickFilters";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
+import { PositionsView } from "@/components/PositionsView";
 import {
   applyQuickFilters,
   calculateFilterStats,
@@ -17,6 +18,10 @@ import {
   getBundleStats,
   type TransactionBundle,
 } from "@/lib/transaction-bundling";
+import {
+  buildPositionRegistry,
+  type PositionRegistry,
+} from "@/lib/position-registry";
 import { PositionSuggestionsPanel } from "@/components/PositionSuggestionsPanel";
 import { CreatePositionModal } from "@/components/CreatePositionModal";
 import { 
@@ -99,6 +104,11 @@ export default function ReconcilePage() {
   
   // Bundling state
   const [enableBundling, setEnableBundling] = useState(true); // On by default
+  
+  // Position Registry state (new auto-matching system)
+  const [positionRegistry, setPositionRegistry] = useState<PositionRegistry | null>(null);
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [viewMode, setViewMode] = useState<'positions' | 'transactions'>('positions');
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -207,6 +217,26 @@ export default function ReconcilePage() {
       setPositionSuggestions([]);
     }
   }, [transactions, reconciliationStore, projectDict]);
+
+  // Load position registry from subgraphs when wallet changes
+  useEffect(() => {
+    async function loadRegistry() {
+      if (!walletAddress || transactions.length === 0) return;
+      
+      setRegistryLoading(true);
+      try {
+        const registry = await buildPositionRegistry(walletAddress);
+        setPositionRegistry(registry);
+        console.log('Position Registry loaded:', registry.positions.length, 'positions,', Object.keys(registry.txToPosition).length, 'tx mappings');
+      } catch (err) {
+        console.error('Failed to load position registry:', err);
+      } finally {
+        setRegistryLoading(false);
+      }
+    }
+    
+    loadRegistry();
+  }, [walletAddress, transactions.length]);
 
   // Handle creating a position from suggestion
   const handleCreatePosition = (suggestion: PositionSuggestion) => {
@@ -553,42 +583,89 @@ export default function ReconcilePage() {
               hiddenTxKeys={hiddenTxKeys}
             />
 
-            {/* Transaction List with Inline Position Assignment */}
-            <div className="bg-[#161B22] rounded-lg border border-[#21262D] overflow-hidden">
-              {/* Show Hidden Toggle */}
-              {hiddenTxKeys.size > 0 && (
-                <div className="flex justify-end px-4 pt-3">
-                  <button
-                    onClick={() => setShowHidden(!showHidden)}
-                    className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                      showHidden 
-                        ? 'bg-[#58A6FF] text-[#0D1117]' 
-                        : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
-                    }`}
-                  >
-                    {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                    {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
-                  </button>
+            {/* View Mode Toggle */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 bg-[#21262D] rounded-lg p-1">
+                <button
+                  onClick={() => setViewMode('positions')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    viewMode === 'positions'
+                      ? 'bg-[#238636] text-white'
+                      : 'text-[#8B949E] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                  Positions View
+                </button>
+                <button
+                  onClick={() => setViewMode('transactions')}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    viewMode === 'transactions'
+                      ? 'bg-[#58A6FF] text-white'
+                      : 'text-[#8B949E] hover:text-[#E6EDF3]'
+                  }`}
+                >
+                  <List className="w-4 h-4" />
+                  Transactions View
+                </button>
+              </div>
+              
+              {viewMode === 'positions' && positionRegistry && (
+                <div className="text-sm text-[#8B949E]">
+                  Auto-matched {Object.keys(positionRegistry.txToPosition).length} of {transactions.length} transactions
                 </div>
               )}
-              <TransactionListSortable 
-                transactions={displayTransactions}
+            </div>
+
+            {/* Positions View (New!) */}
+            {viewMode === 'positions' && (
+              <PositionsView
+                registry={positionRegistry}
+                transactions={filteredTransactions}
                 tokenDict={tokenDict}
                 projectDict={projectDict}
-                chainNames={chainNames}
-                positions={positions}
-                txPositionMap={txPositionMap}
-                hiddenTxKeys={hiddenTxKeys}
-                showHidden={showHidden}
-                onHide={handleHide}
-                onUnhide={handleUnhide}
-                onAssignPosition={handleAssignPosition}
-                onCreatePosition={handleInlineCreatePosition}
-                onUnassignPosition={handleUnassignPosition}
-                title={enableBundling ? `Transactions (${bundles.length} bundles from ${filteredTransactions.length} txs)` : "Transactions"}
-                emptyMessage="No transactions found for this wallet"
+                isLoading={registryLoading}
               />
-            </div>
+            )}
+
+            {/* Transaction List View (Legacy) */}
+            {viewMode === 'transactions' && (
+              <div className="bg-[#161B22] rounded-lg border border-[#21262D] overflow-hidden">
+                {/* Show Hidden Toggle */}
+                {hiddenTxKeys.size > 0 && (
+                  <div className="flex justify-end px-4 pt-3">
+                    <button
+                      onClick={() => setShowHidden(!showHidden)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                        showHidden 
+                          ? 'bg-[#58A6FF] text-[#0D1117]' 
+                          : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
+                      }`}
+                    >
+                      {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                      {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
+                    </button>
+                  </div>
+                )}
+                <TransactionListSortable 
+                  transactions={displayTransactions}
+                  tokenDict={tokenDict}
+                  projectDict={projectDict}
+                  chainNames={chainNames}
+                  positions={positions}
+                  txPositionMap={txPositionMap}
+                  hiddenTxKeys={hiddenTxKeys}
+                  showHidden={showHidden}
+                  onHide={handleHide}
+                  onUnhide={handleUnhide}
+                  onAssignPosition={handleAssignPosition}
+                  onCreatePosition={handleInlineCreatePosition}
+                  onUnassignPosition={handleUnassignPosition}
+                  title={enableBundling ? `Transactions (${bundles.length} bundles from ${filteredTransactions.length} txs)` : "Transactions"}
+                  emptyMessage="No transactions found for this wallet"
+                />
+              </div>
+            )}
           </div>
         ) : (
           <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
