@@ -99,11 +99,13 @@ This approach had critical flaws:
 - [x] 13.4 Create Position suggestions panel (PositionSuggestionsPanel.tsx)
 - [x] 13.5 Test: Create position from suggestion on reconcile page
 
-### Step 14: Strategy Management ⬜
-- [ ] 14.1 Create `lib/reconciliation/strategies.ts` - Strategy CRUD
-- [ ] 14.2 Create Strategy modal UI
-- [ ] 14.3 Add allocation percentage input
-- [ ] 14.4 Test: Create strategy with positions
+### Step 14: Strategy Management ✅ COMPLETE
+- [x] 14.1 Create `lib/reconciliation/strategies.ts` - Strategy CRUD
+- [x] 14.2 Create Strategy modal UI (CreateStrategyModal.tsx)
+- [x] 14.3 Add allocation percentage input
+- [x] 14.4 Integrate strategies into reconcile page
+- [x] 14.5 Add PositionsStrategiesPanel to display positions/strategies
+- [x] 14.6 Test: Create strategy with positions
 
 ### Step 15: Allocation Calculations ⬜
 - [ ] 15.1 Add position allocation derivation (from transactions)
@@ -156,31 +158,16 @@ This approach had critical flaws:
 
 ## Current Task
 
-**Step 11: Summary Bar ✅ COMPLETE**
+**Step 14: Strategy Management ✅ COMPLETE**
 
-Added ReconcileSummary component with:
-- Total Received / Total Sent / Net Flow cards
-- Reconciliation status (unreconciled count)
-- By-Chain breakdown with value details
-- Respects hidden transaction filtering
+Added strategy management system:
+- `strategies.ts` - Full CRUD operations for strategies
+- `CreateStrategyModal.tsx` - UI for creating strategies with position allocation
+- `PositionsStrategiesPanel.tsx` - Collapsible panel showing positions and strategies
+- Integrated into reconcile page with create/delete handlers
+- Strategies can link to positions with allocation percentages
 
-**Phase 2.0b (Frontend UI) Complete!**
-
-### Critical Bug Fixes (Nov 26, 2025)
-
-**Fix 1: Complete Transaction Discovery ✅**
-- Problem: Only querying 9 hardcoded chains, missing user's actual chains
-- Solution: Use `/user/used_chain_list` to detect ALL chains dynamically
-- Solution: Use `/user/all_history_list` for cross-chain queries
-- Result: 56 → 1318 transactions (23x more!)
-
-**Fix 2: SQLite Caching ✅**
-- Problem: Full fetch takes 60+ seconds per request
-- Solution: SQLite cache per wallet with incremental sync
-- Result: First load ~60s, subsequent loads ~1s (60x faster)
-- Files: `backend/services/transaction_cache.py`
-
-**Next up:** Phase 2.0c - Step 14: Strategy Management
+**Next up:** Step 15 - Allocation Calculations (position allocation derivation, strategy status)
 
 ---
 

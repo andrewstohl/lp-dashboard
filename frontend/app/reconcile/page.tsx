@@ -26,10 +26,22 @@ import {
 import {
   suggestPositions,
   ensurePositionStore,
+  getPositions,
+  deletePosition,
   type Position,
   type PositionSuggestion,
   type PositionStore,
 } from "@/lib/reconciliation/positions";
+import {
+  ensureStrategyStore,
+  getStrategies,
+  createStrategy,
+  deleteStrategy,
+  type Strategy,
+  type StrategyStore,
+} from "@/lib/reconciliation/strategies";
+import { PositionsStrategiesPanel } from "@/components/PositionsStrategiesPanel";
+import { CreateStrategyModal } from "@/components/CreateStrategyModal";
 
 export default function ReconcilePage() {
   const [walletAddress, setWalletAddress] = useState(() => {
@@ -62,6 +74,11 @@ export default function ReconcilePage() {
   const [positionSuggestions, setPositionSuggestions] = useState<PositionSuggestion[]>([]);
   const [showCreatePositionModal, setShowCreatePositionModal] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] = useState<PositionSuggestion | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
+
+  // Strategy state
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [showCreateStrategyModal, setShowCreateStrategyModal] = useState(false);
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -69,6 +86,12 @@ export default function ReconcilePage() {
       const store = loadReconciliationStore(walletAddress);
       setReconciliationStore(store);
       setHiddenTxKeys(new Set(getHiddenTxKeys(store)));
+      
+      // Load positions and strategies
+      const storeWithPositions = ensurePositionStore(store);
+      const storeWithStrategies = ensureStrategyStore(storeWithPositions);
+      setPositions(getPositions(storeWithPositions));
+      setStrategies(getStrategies(storeWithStrategies));
     }
   }, [walletAddress]);
 
@@ -188,6 +211,7 @@ export default function ReconcilePage() {
     
     saveReconciliationStore(updatedStore);
     setReconciliationStore(updatedStore);
+    setPositions(getPositions(updatedStore));
     
     // Recompute suggestions
     const suggestions = suggestPositions(transactions, updatedStore, projectDict);
@@ -196,6 +220,55 @@ export default function ReconcilePage() {
     // Close modal
     setShowCreatePositionModal(false);
     setSelectedSuggestion(null);
+  };
+
+  // Handle position delete
+  const handleDeletePosition = (positionId: string) => {
+    if (!reconciliationStore) return;
+    
+    const storeWithPositions = ensurePositionStore(reconciliationStore);
+    const updatedStore = deletePosition(storeWithPositions, positionId);
+    
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    setPositions(getPositions(updatedStore));
+    
+    // Recompute suggestions
+    const suggestions = suggestPositions(transactions, updatedStore, projectDict);
+    setPositionSuggestions(suggestions);
+  };
+
+  // Handle strategy save
+  const handleStrategySave = (strategy: Strategy) => {
+    if (!reconciliationStore) return;
+    
+    const storeWithStrategies = ensureStrategyStore(reconciliationStore);
+    
+    const updatedStore = {
+      ...storeWithStrategies,
+      strategies: {
+        ...storeWithStrategies.strategies,
+        [strategy.id]: strategy,
+      },
+    };
+    
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    setStrategies(getStrategies(updatedStore));
+    
+    setShowCreateStrategyModal(false);
+  };
+
+  // Handle strategy delete
+  const handleDeleteStrategy = (strategyId: string) => {
+    if (!reconciliationStore) return;
+    
+    const storeWithStrategies = ensureStrategyStore(reconciliationStore);
+    const updatedStore = deleteStrategy(storeWithStrategies, strategyId);
+    
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    setStrategies(getStrategies(updatedStore));
   };
 
   // Build project names map from projectDict
@@ -311,6 +384,18 @@ export default function ReconcilePage() {
               />
             )}
             
+            {/* Positions & Strategies Panel */}
+            {(positions.length > 0 || strategies.length > 0) && (
+              <PositionsStrategiesPanel
+                positions={positions}
+                strategies={strategies}
+                chainNames={chainNames}
+                onCreateStrategy={() => setShowCreateStrategyModal(true)}
+                onDeletePosition={handleDeletePosition}
+                onDeleteStrategy={handleDeleteStrategy}
+              />
+            )}
+            
             {/* Show Hidden Toggle */}
             {hiddenTxKeys.size > 0 && (
               <div className="flex justify-end">
@@ -367,6 +452,16 @@ export default function ReconcilePage() {
           store={reconciliationStore}
           projectDict={projectDict}
           chainNames={chainNames}
+        />
+      )}
+
+      {/* Create Strategy Modal */}
+      {reconciliationStore && (
+        <CreateStrategyModal
+          isOpen={showCreateStrategyModal}
+          onClose={() => setShowCreateStrategyModal(false)}
+          onSave={handleStrategySave}
+          store={reconciliationStore}
         />
       )}
     </div>
