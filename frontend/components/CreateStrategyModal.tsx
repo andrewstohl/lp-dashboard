@@ -41,8 +41,10 @@ export function CreateStrategyModal({
   // Available positions
   const [availablePositions, setAvailablePositions] = useState<Position[]>([]);
 
-  // Initialize form
+  // Initialize form when modal opens
   useEffect(() => {
+    if (!isOpen) return;
+    
     const storeWithPositions = ensurePositionStore(store);
     const positions = getPositions(storeWithPositions);
     setAvailablePositions(positions);
@@ -57,7 +59,7 @@ export function CreateStrategyModal({
         }))
       );
     }
-  }, [store, selectedPositionIds]);
+  }, [isOpen]); // Only run when modal opens/closes
   
   // Add position to allocations
   const handleAddPosition = (positionId: string) => {
