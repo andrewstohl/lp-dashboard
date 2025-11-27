@@ -95,6 +95,9 @@ export default function ReconcilePage() {
     }
   }, [walletAddress]);
 
+  // Track if we've auto-loaded on mount
+  const [hasAutoLoaded, setHasAutoLoaded] = useState(false);
+
   // Handle hiding a transaction
   const handleHide = useCallback((chain: string, txHash: string) => {
     if (!reconciliationStore) return;
@@ -156,6 +159,14 @@ export default function ReconcilePage() {
       setLoading(false);
     }
   }, [walletAddress, dateRange, selectedChain, selectedProject]);
+
+  // Auto-load transactions on page mount if wallet address exists
+  useEffect(() => {
+    if (walletAddress && !hasAutoLoaded && typeof window !== 'undefined') {
+      setHasAutoLoaded(true);
+      fetchWithFilters(false);
+    }
+  }, [walletAddress, hasAutoLoaded, fetchWithFilters]);
 
   const handleSearch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
