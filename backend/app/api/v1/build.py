@@ -20,6 +20,7 @@ from backend.services.discovery import get_discovery_service, DEFAULT_CHAIN_NAME
 from backend.services.transaction_cache import get_cache
 from backend.services.coingecko_prices import get_price_service
 from backend.services.debank import get_debank_service
+from backend.app.api.v1.position_lifecycle import process_positions_with_lifecycle_detection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -906,11 +907,22 @@ async def get_positions_with_transactions(
             position["transactionCount"] = len(position["transactions"])
             position["status"] = "open"
         
+        # Split yield/lending positions into lifecycles
+        # This handles cases where multiple deposit/withdraw cycles are grouped together
+        positions = process_positions_with_lifecycle_detection(positions, token_dict)
+        
+        # Recalculate open vs closed after lifecycle detection
+        open_positions = [p for p in positions if p.get("status") == "open"]
+        closed_from_lifecycle = [p for p in positions if p.get("status") == "closed"]
+        
         # Build closed positions from unmatched transactions
         closed_positions = _build_closed_positions(unmatched_transactions, token_dict)
         
+        # Combine all closed positions
+        all_closed = closed_from_lifecycle + closed_positions
+        
         # Combine open and closed positions
-        all_positions = positions + closed_positions
+        all_positions = open_positions + all_closed
         
         # Recalculate unmatched (only those that didn't get grouped into closed positions)
         closed_tx_count = sum(p.get("transactionCount", 0) for p in closed_positions)
@@ -921,16 +933,16 @@ async def get_positions_with_transactions(
             "data": {
                 "transactions": filtered_txs,
                 "positions": all_positions,
-                "openPositions": positions,
-                "closedPositions": closed_positions,
+                "openPositions": open_positions,
+                "closedPositions": all_closed,
                 "unmatchedTransactions": [tx for tx in unmatched_transactions if not tx.get("project_id")],
                 "wallet": wallet.lower(),
                 "tokenDict": token_dict,
                 "summary": {
                     "total": len(filtered_txs),
                     "totalPositions": len(all_positions),
-                    "openPositions": len(positions),
-                    "closedPositions": len(closed_positions),
+                    "openPositions": len(open_positions),
+                    "closedPositions": len(all_closed),
                     "totalTransactions": len(filtered_txs),
                     "matchedTransactions": len(filtered_txs) - truly_unmatched,
                     "unmatchedTransactions": truly_unmatched,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Circle } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Circle, MoreHorizontal, X, Edit2, ExternalLink } from "lucide-react";
 
 interface TokenInfo {
   symbol?: string;
@@ -46,7 +46,6 @@ interface Position {
   status: "open" | "closed";
   transactionCount: number;
   transactions?: Transaction[];
-  // Type-specific fields
   side?: string;
   leverage?: number;
   pnlUsd?: number;
@@ -62,6 +61,8 @@ interface PositionsColumnProps {
   chainNames: Record<string, string>;
   filter?: "all" | "open" | "closed";
   onFilterChange?: (filter: "all" | "open" | "closed") => void;
+  onRemoveTransaction?: (positionId: string, txId: string) => void;
+  onRenamePosition?: (positionId: string, newName: string) => void;
   isLoading?: boolean;
 }
 
@@ -71,9 +72,13 @@ export function PositionsColumn({
   chainNames,
   filter = "all",
   onFilterChange,
+  onRemoveTransaction,
+  onRenamePosition,
   isLoading = false,
 }: PositionsColumnProps) {
   const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set());
+  const [editingPosition, setEditingPosition] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
 
   const toggleExpand = (posId: string) => {
     setExpandedPositions((prev) => {
@@ -85,6 +90,24 @@ export function PositionsColumn({
       }
       return next;
     });
+  };
+
+  const startEditing = (pos: Position) => {
+    setEditingPosition(pos.id);
+    setEditName(pos.displayName || pos.name);
+  };
+
+  const saveEdit = () => {
+    if (editingPosition && editName.trim() && onRenamePosition) {
+      onRenamePosition(editingPosition, editName.trim());
+    }
+    setEditingPosition(null);
+    setEditName("");
+  };
+
+  const cancelEdit = () => {
+    setEditingPosition(null);
+    setEditName("");
   };
 
   const formatDate = (timestamp: number) => {
@@ -103,6 +126,18 @@ export function PositionsColumn({
 
   const getChainName = (chainId: string) => {
     return chainNames[chainId] || chainId.toUpperCase();
+  };
+
+  const getExplorerUrl = (chain: string, hash: string) => {
+    const explorers: Record<string, string> = {
+      eth: "https://etherscan.io/tx/",
+      arb: "https://arbiscan.io/tx/",
+      op: "https://optimistic.etherscan.io/tx/",
+      base: "https://basescan.org/tx/",
+      bsc: "https://bscscan.com/tx/",
+      matic: "https://polygonscan.com/tx/",
+    };
+    return (explorers[chain] || "https://etherscan.io/tx/") + hash;
   };
 
   const getTypeIcon = (type: string, side?: string) => {
@@ -130,13 +165,11 @@ export function PositionsColumn({
     }
   };
 
-  // Filter positions
   const filteredPositions = positions.filter((pos) => {
     if (filter === "all") return true;
     return pos.status === filter;
   });
 
-  // Group by status for display
   const openPositions = filteredPositions.filter((p) => p.status === "open");
   const closedPositions = filteredPositions.filter((p) => p.status === "closed");
 
@@ -168,7 +201,6 @@ export function PositionsColumn({
             </p>
           </div>
         </div>
-        {/* Filter Pills */}
         {onFilterChange && (
           <div className="flex gap-2 mt-2">
             {(["all", "open", "closed"] as const).map((f) => (
@@ -198,11 +230,10 @@ export function PositionsColumn({
           </div>
         ) : (
           <>
-            {/* Open Positions */}
             {(filter === "all" || filter === "open") && openPositions.length > 0 && (
               <div>
                 {filter === "all" && (
-                  <div className="px-4 py-2 bg-[#0D1117] text-xs font-medium text-[#3FB950] sticky top-0">
+                  <div className="px-4 py-2 bg-[#0D1117] text-xs font-medium text-[#3FB950] sticky top-0 z-10">
                     Open Positions ({openPositions.length})
                   </div>
                 )}
@@ -211,12 +242,19 @@ export function PositionsColumn({
                     key={pos.id}
                     position={pos}
                     isExpanded={expandedPositions.has(pos.id)}
+                    isEditing={editingPosition === pos.id}
+                    editName={editName}
                     onToggle={() => toggleExpand(pos.id)}
+                    onStartEdit={() => startEditing(pos)}
+                    onSaveEdit={saveEdit}
+                    onCancelEdit={cancelEdit}
+                    onEditNameChange={setEditName}
+                    onRemoveTransaction={onRemoveTransaction}
                     tokenDict={tokenDict}
-                    chainNames={chainNames}
                     formatDate={formatDate}
                     getTokenSymbol={getTokenSymbol}
                     getChainName={getChainName}
+                    getExplorerUrl={getExplorerUrl}
                     getTypeIcon={getTypeIcon}
                     getTypeColor={getTypeColor}
                   />
@@ -224,11 +262,10 @@ export function PositionsColumn({
               </div>
             )}
 
-            {/* Closed Positions */}
             {(filter === "all" || filter === "closed") && closedPositions.length > 0 && (
               <div>
                 {filter === "all" && (
-                  <div className="px-4 py-2 bg-[#0D1117] text-xs font-medium text-[#8B949E] sticky top-0">
+                  <div className="px-4 py-2 bg-[#0D1117] text-xs font-medium text-[#8B949E] sticky top-0 z-10">
                     Closed Positions ({closedPositions.length})
                   </div>
                 )}
@@ -237,12 +274,19 @@ export function PositionsColumn({
                     key={pos.id}
                     position={pos}
                     isExpanded={expandedPositions.has(pos.id)}
+                    isEditing={editingPosition === pos.id}
+                    editName={editName}
                     onToggle={() => toggleExpand(pos.id)}
+                    onStartEdit={() => startEditing(pos)}
+                    onSaveEdit={saveEdit}
+                    onCancelEdit={cancelEdit}
+                    onEditNameChange={setEditName}
+                    onRemoveTransaction={onRemoveTransaction}
                     tokenDict={tokenDict}
-                    chainNames={chainNames}
                     formatDate={formatDate}
                     getTokenSymbol={getTokenSymbol}
                     getChainName={getChainName}
+                    getExplorerUrl={getExplorerUrl}
                     getTypeIcon={getTypeIcon}
                     getTypeColor={getTypeColor}
                   />
@@ -256,26 +300,40 @@ export function PositionsColumn({
   );
 }
 
-// Separate component for position card
 function PositionCard({
   position,
   isExpanded,
+  isEditing,
+  editName,
   onToggle,
+  onStartEdit,
+  onSaveEdit,
+  onCancelEdit,
+  onEditNameChange,
+  onRemoveTransaction,
   tokenDict,
   formatDate,
   getTokenSymbol,
   getChainName,
+  getExplorerUrl,
   getTypeIcon,
   getTypeColor,
 }: {
   position: Position;
   isExpanded: boolean;
+  isEditing: boolean;
+  editName: string;
   onToggle: () => void;
+  onStartEdit: () => void;
+  onSaveEdit: () => void;
+  onCancelEdit: () => void;
+  onEditNameChange: (name: string) => void;
+  onRemoveTransaction?: (positionId: string, txId: string) => void;
   tokenDict: Record<string, TokenInfo>;
-  chainNames: Record<string, string>;
   formatDate: (ts: number) => string;
   getTokenSymbol: (id: string) => string;
   getChainName: (id: string) => string;
+  getExplorerUrl: (chain: string, hash: string) => string;
   getTypeIcon: (type: string, side?: string) => React.ReactNode;
   getTypeColor: (type: string) => string;
 }) {
@@ -287,37 +345,76 @@ function PositionCard({
   return (
     <div className="border-b border-[#21262D] last:border-b-0">
       {/* Main Row */}
-      <div
-        onClick={onToggle}
-        className="px-4 py-3 hover:bg-[#21262D] cursor-pointer transition-colors"
-      >
+      <div className="px-4 py-3 hover:bg-[#21262D] transition-colors">
         <div className="flex items-start justify-between">
-          <div className="flex items-start gap-2">
+          <div className="flex items-start gap-2 flex-1 cursor-pointer" onClick={onToggle}>
             {isExpanded ? (
               <ChevronDown className="w-4 h-4 text-[#8B949E] mt-0.5 flex-shrink-0" />
             ) : (
               <ChevronRight className="w-4 h-4 text-[#8B949E] mt-0.5 flex-shrink-0" />
             )}
-            <div>
-              <div className="flex items-center gap-2">
-                {getTypeIcon(position.type, position.side)}
-                <span className="text-sm font-medium text-[#E6EDF3]">
-                  {position.displayName || position.name}
-                </span>
-              </div>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-xs px-1.5 py-0.5 rounded bg-[#30363D] text-[#8B949E]">
-                  {getChainName(position.chain)}
-                </span>
-                <span className={`text-xs px-1.5 py-0.5 rounded ${getTypeColor(position.type)}`}>
-                  {position.type}
-                </span>
-                <span className={`text-xs px-1.5 py-0.5 rounded ${
-                  position.status === "open" ? "bg-[#238636] text-white" : "bg-[#30363D] text-[#8B949E]"
-                }`}>
-                  {position.status}
-                </span>
-              </div>
+            <div className="flex-1">
+              {isEditing ? (
+                <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={(e) => onEditNameChange(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") onSaveEdit();
+                      if (e.key === "Escape") onCancelEdit();
+                    }}
+                    className="flex-1 px-2 py-1 bg-[#0D1117] border border-[#30363D] rounded text-sm text-[#E6EDF3] focus:outline-none focus:border-[#58A6FF]"
+                    autoFocus
+                  />
+                  <button
+                    onClick={onSaveEdit}
+                    className="px-2 py-1 bg-[#238636] text-white text-xs rounded hover:bg-[#2EA043]"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={onCancelEdit}
+                    className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-xs rounded hover:bg-[#30363D]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-center gap-2">
+                    {getTypeIcon(position.type, position.side)}
+                    <span className="text-sm font-medium text-[#E6EDF3]">
+                      {position.displayName || position.name}
+                    </span>
+                    {onRemoveTransaction && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onStartEdit();
+                        }}
+                        className="p-0.5 hover:bg-[#30363D] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Edit position name"
+                      >
+                        <Edit2 className="w-3 h-3 text-[#8B949E]" />
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-[#30363D] text-[#8B949E]">
+                      {getChainName(position.chain)}
+                    </span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${getTypeColor(position.type)}`}>
+                      {position.type}
+                    </span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                      position.status === "open" ? "bg-[#238636] text-white" : "bg-[#30363D] text-[#8B949E]"
+                    }`}>
+                      {position.status}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <div className="text-right">
@@ -382,7 +479,7 @@ function PositionCard({
                   Transactions ({position.transactions.length})
                 </div>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {position.transactions.slice(0, 10).map((tx) => {
+                  {position.transactions.map((tx) => {
                     const totalIn = (tx.receives || []).reduce(
                       (sum, r) => sum + getTokenValue(r.token_id, r.amount),
                       0
@@ -395,28 +492,48 @@ function PositionCard({
                     return (
                       <div
                         key={tx.id}
-                        className="flex justify-between text-xs py-1 border-b border-[#21262D] last:border-b-0"
+                        className="flex justify-between items-center text-xs py-1.5 px-2 bg-[#161B22] rounded group"
                       >
-                        <div>
+                        <div className="flex items-center gap-2">
                           <span className="text-[#E6EDF3]">{tx.tx?.name || tx.cate_id || "Tx"}</span>
-                          <span className="text-[#8B949E] ml-2">{formatDate(tx.time_at)}</span>
-                        </div>
-                        <div>
-                          {totalIn > 0 && (
-                            <span className="text-[#3FB950]">+${totalIn.toFixed(2)}</span>
+                          <span className="text-[#8B949E]">{formatDate(tx.time_at)}</span>
+                          {tx.tx?.hash && (
+                            <a
+                              href={getExplorerUrl(tx.chain, tx.tx.hash)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[#58A6FF] hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
                           )}
-                          {totalOut > 0 && (
-                            <span className="text-[#F85149] ml-1">-${totalOut.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div>
+                            {totalIn > 0 && (
+                              <span className="text-[#3FB950]">+${totalIn.toFixed(2)}</span>
+                            )}
+                            {totalOut > 0 && (
+                              <span className="text-[#F85149] ml-1">-${totalOut.toFixed(2)}</span>
+                            )}
+                          </div>
+                          {onRemoveTransaction && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRemoveTransaction(position.id, tx.id);
+                              }}
+                              className="p-0.5 hover:bg-[#F8514933] rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                              title="Remove from position"
+                            >
+                              <X className="w-3 h-3 text-[#F85149]" />
+                            </button>
                           )}
                         </div>
                       </div>
                     );
                   })}
-                  {position.transactions.length > 10 && (
-                    <div className="text-xs text-[#8B949E] text-center py-1">
-                      +{position.transactions.length - 10} more transactions
-                    </div>
-                  )}
                 </div>
               </div>
             )}

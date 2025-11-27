@@ -120,16 +120,31 @@ export default function BuildPage() {
   const [data, setData] = useState<BuildData | null>(null);
   const [positionFilter, setPositionFilter] = useState<"all" | "open" | "closed">("all");
   
-  // Strategies (in-memory for now, Phase 7 will add persistence)
+  // Hidden transactions (persisted in localStorage)
+  const [hiddenTxIds, setHiddenTxIds] = useState<Set<string>>(new Set());
+  const [showHidden, setShowHidden] = useState(false);
+  
+  // Strategies (from API)
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [showCreateStrategy, setShowCreateStrategy] = useState(false);
 
-  // Load cached wallet on mount
+  // Load cached wallet and hidden transactions on mount
   useEffect(() => {
     const cached = localStorage.getItem("vora_wallet_address");
     if (cached) {
       setWalletAddress(cached);
       setInputValue(cached);
+      
+      // Load hidden transactions for this wallet
+      const hiddenKey = `vora_hidden_txs_${cached.toLowerCase()}`;
+      const hiddenData = localStorage.getItem(hiddenKey);
+      if (hiddenData) {
+        try {
+          setHiddenTxIds(new Set(JSON.parse(hiddenData)));
+        } catch (e) {
+          console.error("Failed to load hidden transactions:", e);
+        }
+      }
     }
   }, []);
 
@@ -203,6 +218,49 @@ export default function BuildPage() {
     if (walletAddress) {
       fetchData(walletAddress);
     }
+  };
+
+  // Transaction hiding handlers
+  const handleHideTransaction = (txId: string) => {
+    setHiddenTxIds((prev) => {
+      const next = new Set(prev);
+      next.add(txId);
+      // Persist to localStorage
+      const hiddenKey = `vora_hidden_txs_${walletAddress.toLowerCase()}`;
+      localStorage.setItem(hiddenKey, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const handleUnhideTransaction = (txId: string) => {
+    setHiddenTxIds((prev) => {
+      const next = new Set(prev);
+      next.delete(txId);
+      // Persist to localStorage
+      const hiddenKey = `vora_hidden_txs_${walletAddress.toLowerCase()}`;
+      localStorage.setItem(hiddenKey, JSON.stringify([...next]));
+      return next;
+    });
+  };
+
+  const handleToggleShowHidden = () => {
+    setShowHidden((prev) => !prev);
+  };
+
+  // Position editing handlers (for future implementation)
+  const handleAddToPosition = (txId: string, positionId: string) => {
+    console.log(`TODO: Add transaction ${txId} to position ${positionId}`);
+    // This would require backend support to persist custom transaction-position mappings
+  };
+
+  const handleRemoveFromPosition = (positionId: string, txId: string) => {
+    console.log(`TODO: Remove transaction ${txId} from position ${positionId}`);
+    // This would require backend support to persist custom transaction-position mappings
+  };
+
+  const handleRenamePosition = (positionId: string, newName: string) => {
+    console.log(`TODO: Rename position ${positionId} to ${newName}`);
+    // This would require backend support to persist custom position names
   };
 
   const handleCreateStrategy = () => {
@@ -447,7 +505,14 @@ export default function BuildPage() {
               tokenDict={data?.tokenDict || {}}
               projectDict={data?.projectDict || {}}
               chainNames={chainNames}
+              positions={data?.positions || []}
+              hiddenTxIds={hiddenTxIds}
+              showHidden={showHidden}
               isLoading={loading}
+              onHideTransaction={handleHideTransaction}
+              onUnhideTransaction={handleUnhideTransaction}
+              onAddToPosition={handleAddToPosition}
+              onToggleShowHidden={handleToggleShowHidden}
             />
 
             {/* Column 2: Positions */}
@@ -457,6 +522,8 @@ export default function BuildPage() {
               chainNames={chainNames}
               filter={positionFilter}
               onFilterChange={setPositionFilter}
+              onRemoveTransaction={handleRemoveFromPosition}
+              onRenamePosition={handleRenamePosition}
               isLoading={loading}
             />
 
