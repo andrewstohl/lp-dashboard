@@ -5,7 +5,13 @@ import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database } from "lu
 import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
 import { FilterBar } from "@/components/FilterBar";
+import { QuickFilters } from "@/components/QuickFilters";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
+import {
+  applyQuickFilters,
+  calculateFilterStats,
+  type FilterStats,
+} from "@/lib/transaction-filters";
 import { PositionSuggestionsPanel } from "@/components/PositionSuggestionsPanel";
 import { CreatePositionModal } from "@/components/CreatePositionModal";
 import { 
@@ -79,6 +85,12 @@ export default function ReconcilePage() {
   // Strategy state
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [showCreateStrategyModal, setShowCreateStrategyModal] = useState(false);
+
+  // Quick filter state (spam enabled by default)
+  const [hideSpam, setHideSpam] = useState(true);
+  const [hideApproves, setHideApproves] = useState(false);
+  const [hideDeploys, setHideDeploys] = useState(false);
+  const [hideDust, setHideDust] = useState(false);
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -292,6 +304,19 @@ export default function ReconcilePage() {
     ? Object.keys(summary.byProject).filter(p => p !== 'other')
     : [];
 
+  // Apply quick filters to transactions
+  const filteredTransactions = applyQuickFilters(
+    transactions,
+    tokenDict,
+    { hideSpam, hideApproves, hideDeploys, hideDust }
+  );
+
+  // Calculate filter stats
+  const filterStats: FilterStats = {
+    ...calculateFilterStats(transactions, tokenDict),
+    visible: filteredTransactions.length,
+  };
+
   return (
     <div className="min-h-screen bg-[#0D1117]">
       <header className="bg-[#161B22] border-b border-[#21262D] shadow-sm">
@@ -353,6 +378,19 @@ export default function ReconcilePage() {
               onProjectChange={setSelectedProject}
               onDateRangeChange={setDateRange}
               onApplyFilters={fetchWithFilters}
+            />
+
+            {/* Quick Filters */}
+            <QuickFilters
+              stats={filterStats}
+              hideSpam={hideSpam}
+              hideApproves={hideApproves}
+              hideDeploys={hideDeploys}
+              hideDust={hideDust}
+              onToggleSpam={() => setHideSpam(!hideSpam)}
+              onToggleApproves={() => setHideApproves(!hideApproves)}
+              onToggleDeploys={() => setHideDeploys(!hideDeploys)}
+              onToggleDust={() => setHideDust(!hideDust)}
             />
 
             {/* Summary Stats */}
@@ -426,7 +464,7 @@ export default function ReconcilePage() {
 
             {/* Transaction List */}
             <TransactionList 
-              transactions={transactions}
+              transactions={filteredTransactions}
               tokenDict={tokenDict}
               projectDict={projectDict}
               chainNames={chainNames}
