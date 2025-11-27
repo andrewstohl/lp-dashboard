@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database } from "lucide-react";
+import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database, List, Layers, Target } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionListSortable } from "@/components/TransactionListSortable";
 import { FilterBar } from "@/components/FilterBar";
 import { QuickFilters } from "@/components/QuickFilters";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
+import { Tabs, type Tab } from "@/components/Tabs";
 import {
   applyQuickFilters,
   calculateFilterStats,
@@ -91,6 +92,9 @@ export default function ReconcilePage() {
   const [hideApproves, setHideApproves] = useState(false);
   const [hideDeploys, setHideDeploys] = useState(false);
   const [hideDust, setHideDust] = useState(false);
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'transactions' | 'positions' | 'strategies'>('transactions');
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -401,80 +405,110 @@ export default function ReconcilePage() {
               hiddenTxKeys={hiddenTxKeys}
             />
 
-            {/* Protocol breakdown */}
-            {summary.byProject && Object.keys(summary.byProject).length > 0 && (
-              <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
-                <p className="text-[#8B949E] text-sm mb-3">By Protocol</p>
-                <div className="flex flex-wrap gap-2">
-                  {Object.entries(summary.byProject)
-                    .filter(([project]) => project !== 'other')
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 10)
-                    .map(([project, count]) => {
-                      const projectInfo = projectDict[project];
-                      return (
-                        <span key={project} className="inline-flex items-center gap-1 px-3 py-1 bg-[#21262D] rounded-full text-sm">
-                          <span className="text-[#E6EDF3]">{projectInfo?.name || project}</span>
-                          <span className="text-[#8B949E]">({count})</span>
-                        </span>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
-            
-            {/* Position Suggestions */}
-            {positionSuggestions.length > 0 && (
-              <PositionSuggestionsPanel
-                suggestions={positionSuggestions}
-                projectDict={projectDict}
-                chainNames={chainNames}
-                onCreatePosition={handleCreatePosition}
+            {/* Tabbed Content */}
+            <div className="bg-[#161B22] rounded-lg border border-[#21262D] overflow-hidden">
+              <Tabs
+                tabs={[
+                  { id: 'transactions', label: 'Transactions', count: filteredTransactions.length, icon: <List className="w-4 h-4" /> },
+                  { id: 'positions', label: 'Positions', count: positions.length, icon: <Layers className="w-4 h-4" /> },
+                  { id: 'strategies', label: 'Strategies', count: strategies.length, icon: <Target className="w-4 h-4" /> },
+                ]}
+                activeTab={activeTab}
+                onTabChange={(tab) => setActiveTab(tab as typeof activeTab)}
               />
-            )}
-            
-            {/* Positions & Strategies Panel */}
-            {(positions.length > 0 || strategies.length > 0) && (
-              <PositionsStrategiesPanel
-                positions={positions}
-                strategies={strategies}
-                chainNames={chainNames}
-                onCreateStrategy={() => setShowCreateStrategyModal(true)}
-                onDeletePosition={handleDeletePosition}
-                onDeleteStrategy={handleDeleteStrategy}
-              />
-            )}
-            
-            {/* Show Hidden Toggle */}
-            {hiddenTxKeys.size > 0 && (
-              <div className="flex justify-end">
-                <button
-                  onClick={() => setShowHidden(!showHidden)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
-                    showHidden 
-                      ? 'bg-[#58A6FF] text-[#0D1117]' 
-                      : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
-                  }`}
-                >
-                  {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                  {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
-                </button>
-              </div>
-            )}
 
-            {/* Transaction List */}
-            <TransactionListSortable 
-              transactions={filteredTransactions}
-              tokenDict={tokenDict}
-              projectDict={projectDict}
-              chainNames={chainNames}
-              hiddenTxKeys={hiddenTxKeys}
-              showHidden={showHidden}
-              onHide={handleHide}
-              onUnhide={handleUnhide}
-              title={`Discovered Transactions`}
-              emptyMessage="No transactions found for this wallet"
-            />
+              {/* Transactions Tab */}
+              {activeTab === 'transactions' && (
+                <div>
+                  {/* Show Hidden Toggle */}
+                  {hiddenTxKeys.size > 0 && (
+                    <div className="flex justify-end px-4 pt-3">
+                      <button
+                        onClick={() => setShowHidden(!showHidden)}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                          showHidden 
+                            ? 'bg-[#58A6FF] text-[#0D1117]' 
+                            : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
+                        }`}
+                      >
+                        {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                        {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
+                      </button>
+                    </div>
+                  )}
+                  <TransactionListSortable 
+                    transactions={filteredTransactions}
+                    tokenDict={tokenDict}
+                    projectDict={projectDict}
+                    chainNames={chainNames}
+                    hiddenTxKeys={hiddenTxKeys}
+                    showHidden={showHidden}
+                    onHide={handleHide}
+                    onUnhide={handleUnhide}
+                    title=""
+                    emptyMessage="No transactions found for this wallet"
+                  />
+                </div>
+              )}
+
+              {/* Positions Tab */}
+              {activeTab === 'positions' && (
+                <div className="p-4 space-y-4">
+                  {positionSuggestions.length > 0 && (
+                    <PositionSuggestionsPanel
+                      suggestions={positionSuggestions}
+                      projectDict={projectDict}
+                      chainNames={chainNames}
+                      onCreatePosition={handleCreatePosition}
+                    />
+                  )}
+                  {positions.length > 0 ? (
+                    <PositionsStrategiesPanel
+                      positions={positions}
+                      strategies={[]}
+                      chainNames={chainNames}
+                      onCreateStrategy={() => {}}
+                      onDeletePosition={handleDeletePosition}
+                      onDeleteStrategy={() => {}}
+                    />
+                  ) : (
+                    <div className="text-center py-8 text-[#8B949E]">
+                      <Layers className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No positions created yet</p>
+                      <p className="text-sm mt-1">Create positions from transactions to track your DeFi activity</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Strategies Tab */}
+              {activeTab === 'strategies' && (
+                <div className="p-4">
+                  {strategies.length > 0 ? (
+                    <PositionsStrategiesPanel
+                      positions={[]}
+                      strategies={strategies}
+                      chainNames={chainNames}
+                      onCreateStrategy={() => setShowCreateStrategyModal(true)}
+                      onDeletePosition={() => {}}
+                      onDeleteStrategy={handleDeleteStrategy}
+                    />
+                  ) : (
+                    <div className="text-center py-8 text-[#8B949E]">
+                      <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No strategies created yet</p>
+                      <p className="text-sm mt-1">Group positions into strategies for portfolio analysis</p>
+                      <button
+                        onClick={() => setShowCreateStrategyModal(true)}
+                        className="mt-4 px-4 py-2 bg-[#238636] text-white rounded-lg hover:bg-[#2ea043] transition-colors"
+                      >
+                        Create Strategy
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
