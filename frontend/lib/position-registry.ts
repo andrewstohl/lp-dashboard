@@ -122,7 +122,9 @@ export async function fetchGmxPositions(walletAddress: string): Promise<Protocol
       group.orders.push(...actions);
       
       for (const action of actions) {
-        group.txHashes.add(action.transaction);
+        if (action.transaction) {
+          group.txHashes.add(action.transaction);
+        }
         group.firstTimestamp = Math.min(group.firstTimestamp, action.timestamp);
         group.lastTimestamp = Math.max(group.lastTimestamp, action.timestamp);
         
@@ -281,7 +283,9 @@ export async function buildPositionRegistry(walletAddress: string): Promise<Posi
   const txToPosition: Record<string, string> = {};
   for (const pos of allPositions) {
     for (const txHash of pos.txHashes) {
-      txToPosition[txHash.toLowerCase()] = pos.id;
+      if (txHash) {
+        txToPosition[txHash.toLowerCase()] = pos.id;
+      }
     }
   }
 
