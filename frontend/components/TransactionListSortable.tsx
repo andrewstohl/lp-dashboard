@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { type Transaction, type TokenMeta, type ProjectMeta } from "@/lib/api";
-import { TransactionRow } from "./TransactionRow";
+import { TransactionRowCompact } from "./TransactionRowCompact";
 import { getTxKey } from "@/lib/reconciliation/storage";
 
 // Sort direction type
@@ -239,7 +239,7 @@ export function TransactionListSortable({
       {/* Transaction rows */}
       <div className="divide-y divide-[#21262D]">
         {sortedTransactions.map((tx, idx) => (
-          <TransactionRow 
+          <TransactionRowCompact 
             key={`${tx.id}-${idx}`} 
             transaction={tx}
             tokenDict={tokenDict}
