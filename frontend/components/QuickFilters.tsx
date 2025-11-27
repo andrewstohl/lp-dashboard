@@ -1,6 +1,6 @@
 "use client";
 
-import { Shield, FileCheck, Rocket, Coins } from "lucide-react";
+import { Shield, FileCheck, Rocket, Coins, Layers } from "lucide-react";
 import { type FilterStats } from "@/lib/transaction-filters";
 
 interface QuickFiltersProps {
@@ -9,10 +9,13 @@ interface QuickFiltersProps {
   hideApproves: boolean;
   hideDeploys: boolean;
   hideDust: boolean;
+  enableBundling: boolean;
+  bundleStats?: { gmxOrders: number; approveActions: number; gasRefunds: number };
   onToggleSpam: () => void;
   onToggleApproves: () => void;
   onToggleDeploys: () => void;
   onToggleDust: () => void;
+  onToggleBundling: () => void;
 }
 
 export function QuickFilters({
@@ -21,18 +24,47 @@ export function QuickFilters({
   hideApproves,
   hideDeploys,
   hideDust,
+  enableBundling,
+  bundleStats,
   onToggleSpam,
   onToggleApproves,
   onToggleDeploys,
   onToggleDust,
+  onToggleBundling,
 }: QuickFiltersProps) {
+  const totalBundled = bundleStats 
+    ? bundleStats.gmxOrders + bundleStats.approveActions + bundleStats.gasRefunds 
+    : 0;
+
   return (
     <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <span className="text-sm font-medium text-[#8B949E]">Quick Filters</span>
-        <span className="text-xs text-[#484F58]">
-          ({stats.visible} of {stats.total} shown)
-        </span>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-[#8B949E]">Quick Filters</span>
+          <span className="text-xs text-[#484F58]">
+            ({stats.visible} of {stats.total} shown)
+          </span>
+        </div>
+        
+        {/* Bundling Toggle - Prominent */}
+        <button
+          onClick={onToggleBundling}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            enableBundling
+              ? "bg-[#238636] text-white"
+              : "bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3] border border-[#30363D]"
+          }`}
+        >
+          <Layers className="w-4 h-4" />
+          <span>{enableBundling ? 'Bundled View' : 'Bundle Related'}</span>
+          {totalBundled > 0 && (
+            <span className={`px-1.5 py-0.5 rounded text-xs ${
+              enableBundling ? "bg-white/20" : "bg-[#30363D]"
+            }`}>
+              {totalBundled} groups
+            </span>
+          )}
+        </button>
       </div>
       
       <div className="flex flex-wrap gap-2">

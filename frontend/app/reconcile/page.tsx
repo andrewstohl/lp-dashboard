@@ -12,6 +12,11 @@ import {
   calculateFilterStats,
   type FilterStats,
 } from "@/lib/transaction-filters";
+import {
+  bundleTransactions,
+  getBundleStats,
+  type TransactionBundle,
+} from "@/lib/transaction-bundling";
 import { PositionSuggestionsPanel } from "@/components/PositionSuggestionsPanel";
 import { CreatePositionModal } from "@/components/CreatePositionModal";
 import { 
@@ -91,6 +96,9 @@ export default function ReconcilePage() {
   const [hideApproves, setHideApproves] = useState(false);
   const [hideDeploys, setHideDeploys] = useState(false);
   const [hideDust, setHideDust] = useState(false);
+  
+  // Bundling state
+  const [enableBundling, setEnableBundling] = useState(true); // On by default
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -449,6 +457,15 @@ export default function ReconcilePage() {
     visible: filteredTransactions.length,
   };
 
+  // Compute bundles
+  const bundles = bundleTransactions(filteredTransactions, tokenDict);
+  const bundleStats = getBundleStats(bundles);
+
+  // When bundling is enabled, we show primary transactions only
+  const displayTransactions = enableBundling
+    ? bundles.map(b => b.primaryTx)
+    : filteredTransactions;
+
   return (
     <div className="min-h-screen bg-[#0D1117]">
       <header className="bg-[#161B22] border-b border-[#21262D] shadow-sm">
@@ -519,10 +536,13 @@ export default function ReconcilePage() {
               hideApproves={hideApproves}
               hideDeploys={hideDeploys}
               hideDust={hideDust}
+              enableBundling={enableBundling}
+              bundleStats={bundleStats}
               onToggleSpam={() => setHideSpam(!hideSpam)}
               onToggleApproves={() => setHideApproves(!hideApproves)}
               onToggleDeploys={() => setHideDeploys(!hideDeploys)}
               onToggleDust={() => setHideDust(!hideDust)}
+              onToggleBundling={() => setEnableBundling(!enableBundling)}
             />
 
             {/* Summary Stats */}
@@ -552,7 +572,7 @@ export default function ReconcilePage() {
                 </div>
               )}
               <TransactionListSortable 
-                transactions={filteredTransactions}
+                transactions={displayTransactions}
                 tokenDict={tokenDict}
                 projectDict={projectDict}
                 chainNames={chainNames}
@@ -565,7 +585,7 @@ export default function ReconcilePage() {
                 onAssignPosition={handleAssignPosition}
                 onCreatePosition={handleInlineCreatePosition}
                 onUnassignPosition={handleUnassignPosition}
-                title="Transactions"
+                title={enableBundling ? `Transactions (${bundles.length} bundles from ${filteredTransactions.length} txs)` : "Transactions"}
                 emptyMessage="No transactions found for this wallet"
               />
             </div>
