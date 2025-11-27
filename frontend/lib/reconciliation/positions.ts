@@ -211,7 +211,7 @@ export function updatePosition(
   };
 }
 
-// Delete a position (unlinks transactions, doesn't delete them)
+// Delete a position (unlinks transactions and removes from strategies)
 export function deletePosition(
   store: ReconciliationStore & PositionStore,
   positionId: string
@@ -228,6 +228,23 @@ export function deletePosition(
     }
   }
   
+  // Remove position from any strategies that reference it
+  const strategies = (store as any).strategies as Record<string, any> | undefined;
+  let updatedStrategies = strategies;
+  
+  if (strategies) {
+    updatedStrategies = { ...strategies };
+    for (const [stratId, strategy] of Object.entries(updatedStrategies)) {
+      if (strategy.positions?.some((p: any) => p.positionId === positionId)) {
+        updatedStrategies[stratId] = {
+          ...strategy,
+          positions: strategy.positions.filter((p: any) => p.positionId !== positionId),
+          updatedAt: Date.now(),
+        };
+      }
+    }
+  }
+  
   // Remove position
   const { [positionId]: _, ...remainingPositions } = store.positions;
   
@@ -235,6 +252,7 @@ export function deletePosition(
     ...store,
     transactions: updatedTransactions,
     positions: remainingPositions,
+    ...(updatedStrategies ? { strategies: updatedStrategies } : {}),
   };
 }
 
