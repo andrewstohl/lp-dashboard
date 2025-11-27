@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 27, 2025 (Build Page Phases 1-6 Complete, Phase 7 Next)  
+> **Last Updated:** November 27, 2025 (Build Page Phases 1-7 Complete, Phase 8 Next)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -553,8 +553,8 @@ Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment 
 | 4 | 4.1-4.2 | Transactions column UI | ✅ Complete |
 | 5 | 5.1-5.3 | Positions column UI | ✅ Complete |
 | 6 | 6.1-6.5 | Strategies column UI | ✅ Complete |
-| 7 | 7.1-7.3 | Persistence | 🔄 Next |
-| 8 | 8.1-8.3 | Integration & polish | ❌ Not started |
+| 7 | 7.1-7.3 | Persistence | ✅ Complete |
+| 8 | 8.1-8.3 | Integration & polish | 🔄 Next |
 
 ### Current Results (Test Wallet, 6 months)
 

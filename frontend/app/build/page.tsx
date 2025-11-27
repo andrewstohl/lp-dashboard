@@ -209,62 +209,115 @@ export default function BuildPage() {
     setShowCreateStrategy(true);
   };
 
-  const handleStrategySubmit = (strategyData: {
+  const handleStrategySubmit = async (strategyData: {
     name: string;
     description?: string;
     positions: Array<{ positionId: string; percentage: number }>;
   }) => {
-    // Calculate total value from positions
-    const totalValue = strategyData.positions.reduce((sum, sp) => {
-      const pos = data?.positions.find((p) => p.id === sp.positionId);
-      return sum + (pos?.valueUsd || 0) * (sp.percentage / 100);
-    }, 0);
+    try {
+      // Create strategy via API
+      const response = await fetch(
+        `${API_URL}/api/v1/build/strategies?wallet=${walletAddress}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: strategyData.name,
+            description: strategyData.description,
+            positions: strategyData.positions,
+          }),
+        }
+      );
 
-    // Determine status based on positions
-    const hasOpenPosition = strategyData.positions.some((sp) => {
-      const pos = data?.positions.find((p) => p.id === sp.positionId);
-      return pos?.status === "open";
-    });
+      if (!response.ok) {
+        throw new Error(`Failed to create strategy: ${response.status}`);
+      }
 
-    const newStrategy: Strategy = {
-      id: `strategy_${Date.now()}`,
-      name: strategyData.name,
-      description: strategyData.description,
-      status: hasOpenPosition ? "open" : "closed",
-      positionIds: strategyData.positions.map((p) => p.positionId),
-      totalValueUsd: totalValue,
-      createdAt: Date.now(),
-    };
-
-    setStrategies((prev) => [...prev, newStrategy]);
-    
-    // Save to localStorage for persistence across refreshes
-    const updated = [...strategies, newStrategy];
-    localStorage.setItem(`vora_strategies_${walletAddress}`, JSON.stringify(updated));
+      // Refresh strategies from API
+      await fetchStrategies(walletAddress);
+    } catch (err) {
+      console.error("Error creating strategy:", err);
+      setError(err instanceof Error ? err.message : "Failed to create strategy");
+    }
   };
 
-  // Load strategies from localStorage when wallet changes
+  // Fetch strategies from API
+  const fetchStrategies = useCallback(async (address: string) => {
+    if (!address) return;
+    
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/build/strategies?wallet=${address}`
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch strategies: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.status === "success") {
+        // Transform API response to match frontend Strategy interface
+        const apiStrategies = (result.data.strategies || []).map((s: any) => ({
+          id: s.id,
+          name: s.name,
+          description: s.description,
+          status: s.status as "draft" | "open" | "closed",
+          positionIds: s.positionIds || [],
+          totalValueUsd: 0, // Will be calculated below
+          totalPnlUsd: undefined,
+          createdAt: new Date(s.createdAt).getTime(),
+        }));
+        
+        // Calculate total value for each strategy based on current positions
+        if (data?.positions) {
+          apiStrategies.forEach((strat: Strategy) => {
+            strat.totalValueUsd = strat.positionIds.reduce((sum: number, posId: string) => {
+              const pos = data.positions.find((p) => p.id === posId);
+              return sum + (pos?.valueUsd || 0);
+            }, 0);
+            
+            // Update status based on positions
+            const hasOpenPosition = strat.positionIds.some((posId: string) => {
+              const pos = data.positions.find((p) => p.id === posId);
+              return pos?.status === "open";
+            });
+            strat.status = hasOpenPosition ? "open" : (strat.positionIds.length > 0 ? "closed" : "draft");
+          });
+        }
+        
+        setStrategies(apiStrategies);
+      }
+    } catch (err) {
+      console.error("Error fetching strategies:", err);
+      // Don't set error state - strategies are optional
+    }
+  }, [data?.positions]);
+
+  // Load strategies when wallet changes or data loads
   useEffect(() => {
     if (walletAddress) {
-      const saved = localStorage.getItem(`vora_strategies_${walletAddress}`);
-      if (saved) {
-        try {
-          setStrategies(JSON.parse(saved));
-        } catch {
-          setStrategies([]);
-        }
-      } else {
-        setStrategies([]);
-      }
+      fetchStrategies(walletAddress);
     }
-  }, [walletAddress]);
+  }, [walletAddress, fetchStrategies]);
 
-  const handleDeleteStrategy = (strategyId: string) => {
-    setStrategies((prev) => {
-      const updated = prev.filter((s) => s.id !== strategyId);
-      localStorage.setItem(`vora_strategies_${walletAddress}`, JSON.stringify(updated));
-      return updated;
-    });
+  const handleDeleteStrategy = async (strategyId: string) => {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/build/strategies/${strategyId}?wallet=${walletAddress}`,
+        { method: "DELETE" }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete strategy: ${response.status}`);
+      }
+
+      // Remove from local state
+      setStrategies((prev) => prev.filter((s) => s.id !== strategyId));
+    } catch (err) {
+      console.error("Error deleting strategy:", err);
+      setError(err instanceof Error ? err.message : "Failed to delete strategy");
+    }
   };
 
   // Get chain names from data or use defaults

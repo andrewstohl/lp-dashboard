@@ -1196,3 +1196,197 @@ def _generate_closed_position_name(position: Dict, txs: List[Dict], token_dict: 
         return f"{protocol} Yield (Closed)"
     
     return f"{protocol} Position (Closed)"
+
+
+
+# ===== Phase 7: Strategy Persistence API =====
+
+from pydantic import BaseModel
+from typing import List as TypeList
+
+
+class StrategyPositionInput(BaseModel):
+    positionId: str
+    percentage: float = 100.0
+
+
+class CreateStrategyRequest(BaseModel):
+    name: str
+    description: str | None = None
+    positions: TypeList[StrategyPositionInput] = []
+
+
+class UpdateStrategyRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    positions: TypeList[StrategyPositionInput] | None = None
+
+
+@router.get("/strategies")
+async def get_strategies(
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """
+    Get all strategies for a wallet.
+    """
+    try:
+        cache = get_cache(wallet)
+        strategies = cache.get_all_strategies()
+        
+        return {
+            "status": "success",
+            "data": {
+                "strategies": strategies,
+                "count": len(strategies)
+            }
+        }
+    except Exception as e:
+        logger.exception(f"Error getting strategies for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get strategies", "message": str(e)}
+        )
+
+
+@router.post("/strategies")
+async def create_strategy(
+    wallet: str = Query(..., description="Wallet address"),
+    request: CreateStrategyRequest = None
+) -> Dict[str, Any]:
+    """
+    Create a new strategy.
+    """
+    try:
+        cache = get_cache(wallet)
+        
+        # Generate unique ID
+        import time
+        strategy_id = f"strategy_{int(time.time() * 1000)}"
+        
+        # Convert positions to expected format
+        positions = [
+            {"position_id": p.positionId, "percentage": p.percentage}
+            for p in (request.positions or [])
+        ]
+        
+        strategy = cache.create_strategy(
+            strategy_id=strategy_id,
+            name=request.name,
+            description=request.description,
+            positions=positions
+        )
+        
+        return {
+            "status": "success",
+            "data": strategy
+        }
+    except Exception as e:
+        logger.exception(f"Error creating strategy for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to create strategy", "message": str(e)}
+        )
+
+
+@router.get("/strategies/{strategy_id}")
+async def get_strategy(
+    strategy_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """
+    Get a specific strategy by ID.
+    """
+    try:
+        cache = get_cache(wallet)
+        strategy = cache.get_strategy(strategy_id)
+        
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        
+        return {
+            "status": "success",
+            "data": strategy
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting strategy {strategy_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get strategy", "message": str(e)}
+        )
+
+
+@router.put("/strategies/{strategy_id}")
+async def update_strategy(
+    strategy_id: str,
+    wallet: str = Query(..., description="Wallet address"),
+    request: UpdateStrategyRequest = None
+) -> Dict[str, Any]:
+    """
+    Update an existing strategy.
+    """
+    try:
+        cache = get_cache(wallet)
+        
+        # Convert positions if provided
+        positions = None
+        if request.positions is not None:
+            positions = [
+                {"positionId": p.positionId, "percentage": p.percentage}
+                for p in request.positions
+            ]
+        
+        strategy = cache.update_strategy(
+            strategy_id=strategy_id,
+            name=request.name,
+            description=request.description,
+            status=request.status,
+            positions=positions
+        )
+        
+        if not strategy:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        
+        return {
+            "status": "success",
+            "data": strategy
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating strategy {strategy_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to update strategy", "message": str(e)}
+        )
+
+
+@router.delete("/strategies/{strategy_id}")
+async def delete_strategy(
+    strategy_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """
+    Delete a strategy.
+    """
+    try:
+        cache = get_cache(wallet)
+        deleted = cache.delete_strategy(strategy_id)
+        
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        
+        return {
+            "status": "success",
+            "data": {"deleted": True, "id": strategy_id}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting strategy {strategy_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to delete strategy", "message": str(e)}
+        )

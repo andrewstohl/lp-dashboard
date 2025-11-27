@@ -1,8 +1,8 @@
 # Build Page Implementation Plan
 
-> **Version:** 1.1  
+> **Version:** 1.2  
 > **Created:** November 27, 2025  
-> **Status:** Phases 1-6 Complete, Phase 7 (Persistence) Next
+> **Status:** Phases 1-7 Complete, Phase 8 (Polish) Next
 
 ---
 
@@ -104,15 +104,15 @@ The Build page is a three-column workflow for constructing portfolios from raw t
 | 6.4 | Strategy expansion | ✅ Done |
 | 6.5 | Strategy actions (delete) | ✅ Done |
 
-### Phase 7: Persistence 🔄 NEXT
+### Phase 7: Persistence ✅ COMPLETE
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 7.1 | Database schema (positions, strategies) | ❌ Not started |
-| 7.2 | CRUD API endpoints | ❌ Not started |
-| 7.3 | State management | ❌ Not started |
+| 7.1 | Database schema (strategies table) | ✅ Done |
+| 7.2 | CRUD API endpoints | ✅ Done |
+| 7.3 | Frontend API integration | ✅ Done |
 
-### Phase 8: Integration & Polish
+### Phase 8: Integration & Polish 🔄 NEXT
 
 | Step | Description | Status |
 |------|-------------|--------|
@@ -131,6 +131,11 @@ The Build page is a three-column workflow for constructing portfolios from raw t
 | `GET /api/v1/build/positions/with-transactions` | Positions + linked transactions |
 | `POST /api/v1/build/enrich-prices` | On-demand price enrichment |
 | `GET /api/v1/build/cache-stats` | Cache statistics |
+| `GET /api/v1/build/strategies` | Get all strategies |
+| `POST /api/v1/build/strategies` | Create strategy |
+| `GET /api/v1/build/strategies/{id}` | Get strategy |
+| `PUT /api/v1/build/strategies/{id}` | Update strategy |
+| `DELETE /api/v1/build/strategies/{id}` | Delete strategy |
 
 ---
 

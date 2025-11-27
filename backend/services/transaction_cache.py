@@ -75,6 +75,50 @@ class TransactionCache:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            
+            # ===== Phase 7: Strategy Persistence =====
+            
+            # Strategies table - user-defined groupings of positions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS strategies (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Strategy-Position assignments (many-to-many with allocation %)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_positions (
+                    strategy_id TEXT NOT NULL,
+                    position_id TEXT NOT NULL,
+                    percentage REAL NOT NULL DEFAULT 100.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (strategy_id, position_id),
+                    FOREIGN KEY (strategy_id) REFERENCES strategies(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sp_strategy ON strategy_positions(strategy_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_sp_position ON strategy_positions(position_id)
+            """)
+            
+            # Position customizations (user-defined names, notes)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS position_customizations (
+                    position_id TEXT PRIMARY KEY,
+                    custom_name TEXT,
+                    notes TEXT,
+                    hidden INTEGER DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
             conn.commit()
 
     def get_latest_timestamp(self) -> Optional[int]:
@@ -326,6 +370,140 @@ class TransactionCache:
             conn.execute("DELETE FROM transaction_prices")
             conn.commit()
         logger.info(f"Cleared price cache for {self.wallet[:10]}...")
+
+    # ===== Strategy CRUD Methods =====
+    
+    def create_strategy(
+        self, 
+        strategy_id: str,
+        name: str, 
+        description: Optional[str] = None,
+        positions: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a new strategy.
+        
+        Args:
+            strategy_id: Unique ID for the strategy
+            name: Strategy name
+            description: Optional description
+            positions: List of {position_id, percentage} dicts
+        
+        Returns:
+            Created strategy dict
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO strategies (id, name, description, status)
+                VALUES (?, ?, ?, 'draft')
+            """, (strategy_id, name, description))
+            
+            # Add position assignments if provided
+            if positions:
+                for pos in positions:
+                    conn.execute("""
+                        INSERT INTO strategy_positions (strategy_id, position_id, percentage)
+                        VALUES (?, ?, ?)
+                    """, (strategy_id, pos["position_id"], pos.get("percentage", 100.0)))
+            
+            conn.commit()
+        
+        return self.get_strategy(strategy_id)
+    
+    def get_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+        """Get a strategy by ID with its positions"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            row = conn.execute("""
+                SELECT * FROM strategies WHERE id = ?
+            """, (strategy_id,)).fetchone()
+            
+            if not row:
+                return None
+            
+            # Get position assignments
+            positions = conn.execute("""
+                SELECT position_id, percentage FROM strategy_positions
+                WHERE strategy_id = ?
+            """, (strategy_id,)).fetchall()
+            
+            return {
+                "id": row["id"],
+                "name": row["name"],
+                "description": row["description"],
+                "status": row["status"],
+                "positionIds": [p["position_id"] for p in positions],
+                "positions": [
+                    {"positionId": p["position_id"], "percentage": p["percentage"]}
+                    for p in positions
+                ],
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+    
+    def get_all_strategies(self) -> List[Dict[str, Any]]:
+        """Get all strategies for this wallet"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            rows = conn.execute("""
+                SELECT id FROM strategies ORDER BY created_at DESC
+            """).fetchall()
+            
+            return [self.get_strategy(row["id"]) for row in rows]
+    
+    def update_strategy(
+        self, 
+        strategy_id: str, 
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        status: Optional[str] = None,
+        positions: Optional[List[Dict[str, Any]]] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update a strategy"""
+        with sqlite3.connect(self.db_path) as conn:
+            # Build update query dynamically
+            updates = []
+            params = []
+            
+            if name is not None:
+                updates.append("name = ?")
+                params.append(name)
+            if description is not None:
+                updates.append("description = ?")
+                params.append(description)
+            if status is not None:
+                updates.append("status = ?")
+                params.append(status)
+            
+            if updates:
+                updates.append("updated_at = CURRENT_TIMESTAMP")
+                params.append(strategy_id)
+                conn.execute(f"""
+                    UPDATE strategies SET {', '.join(updates)} WHERE id = ?
+                """, params)
+            
+            # Update positions if provided
+            if positions is not None:
+                # Clear existing and re-insert
+                conn.execute("DELETE FROM strategy_positions WHERE strategy_id = ?", (strategy_id,))
+                for pos in positions:
+                    conn.execute("""
+                        INSERT INTO strategy_positions (strategy_id, position_id, percentage)
+                        VALUES (?, ?, ?)
+                    """, (strategy_id, pos["positionId"], pos.get("percentage", 100.0)))
+            
+            conn.commit()
+        
+        return self.get_strategy(strategy_id)
+    
+    def delete_strategy(self, strategy_id: str) -> bool:
+        """Delete a strategy"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
+            conn.commit()
+            return cursor.rowcount > 0
 
 
 def get_cache(wallet_address: str) -> TransactionCache:
