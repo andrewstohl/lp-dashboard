@@ -197,7 +197,7 @@ export default function ReconcilePage() {
   useEffect(() => {
     if (transactions.length > 0 && reconciliationStore) {
       const storeWithPositions = ensurePositionStore(reconciliationStore);
-      const suggestions = suggestPositions(transactions, storeWithPositions, projectDict);
+      const suggestions = suggestPositions(transactions, storeWithPositions, projectDict, tokenDict);
       setPositionSuggestions(suggestions);
     } else {
       setPositionSuggestions([]);
@@ -241,7 +241,7 @@ export default function ReconcilePage() {
     setPositions(getPositions(updatedStore));
     
     // Recompute suggestions
-    const suggestions = suggestPositions(transactions, updatedStore, projectDict);
+    const suggestions = suggestPositions(transactions, updatedStore, projectDict, tokenDict);
     setPositionSuggestions(suggestions);
     
     // Close modal
@@ -261,7 +261,7 @@ export default function ReconcilePage() {
     setPositions(getPositions(updatedStore));
     
     // Recompute suggestions
-    const suggestions = suggestPositions(transactions, updatedStore, projectDict);
+    const suggestions = suggestPositions(transactions, updatedStore, projectDict, tokenDict);
     setPositionSuggestions(suggestions);
   };
 

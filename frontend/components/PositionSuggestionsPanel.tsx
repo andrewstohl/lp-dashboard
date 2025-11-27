@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Layers, ChevronRight, Sparkles, Check } from "lucide-react";
-import type { PositionSuggestion } from "@/lib/reconciliation/positions";
+import { Layers, ChevronRight, Sparkles, Check, TrendingUp, Droplets, Landmark, Coins, ArrowLeftRight, HelpCircle } from "lucide-react";
+import type { PositionSuggestion, PositionType } from "@/lib/reconciliation/positions";
 import type { ProjectMeta } from "@/lib/api";
 
 interface PositionSuggestionsPanelProps {
@@ -17,6 +17,17 @@ const CONFIDENCE_COLORS = {
   high: "bg-[#238636] text-white",
   medium: "bg-[#9E6A03] text-white", 
   low: "bg-[#484F58] text-[#E6EDF3]",
+};
+
+// Position type config
+const POSITION_TYPE_CONFIG: Record<PositionType, { icon: typeof Layers; label: string; color: string }> = {
+  lp: { icon: Droplets, label: "LP", color: "text-[#58A6FF]" },
+  perpetual: { icon: TrendingUp, label: "Perp", color: "text-[#A371F7]" },
+  lending: { icon: Landmark, label: "Lending", color: "text-[#3FB950]" },
+  staking: { icon: Coins, label: "Staking", color: "text-[#F0B90B]" },
+  bridge: { icon: ArrowLeftRight, label: "Bridge", color: "text-[#F85149]" },
+  swap: { icon: ArrowLeftRight, label: "Swap", color: "text-[#8B949E]" },
+  unknown: { icon: HelpCircle, label: "Other", color: "text-[#8B949E]" },
 };
 
 export function PositionSuggestionsPanel({
@@ -59,6 +70,8 @@ export function PositionSuggestionsPanel({
             {suggestions.slice(0, 5).map((suggestion) => {
               const protoName = suggestion.protocolName || projectDict[suggestion.protocol]?.name || suggestion.protocol;
               const chainName = chainNames[suggestion.chain] || suggestion.chain;
+              const typeConfig = POSITION_TYPE_CONFIG[suggestion.positionType];
+              const TypeIcon = typeConfig.icon;
               
               return (
                 <div
@@ -66,12 +79,15 @@ export function PositionSuggestionsPanel({
                   className="flex items-center justify-between p-4 hover:bg-[#1C2128]"
                 >
                   <div className="flex items-center gap-3">
-                    <Layers className="w-5 h-5 text-[#8B949E]" />
+                    <TypeIcon className={`w-5 h-5 ${typeConfig.color}`} />
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium text-[#E6EDF3]">
                           {protoName}
                           {suggestion.tokenPair && ` • ${suggestion.tokenPair}`}
+                        </span>
+                        <span className={`px-1.5 py-0.5 text-xs rounded ${typeConfig.color} bg-opacity-20`} style={{ backgroundColor: 'currentColor', opacity: 0.15 }}>
+                          {typeConfig.label}
                         </span>
                         <span className={`px-1.5 py-0.5 text-xs rounded ${CONFIDENCE_COLORS[suggestion.confidence]}`}>
                           {suggestion.confidence}

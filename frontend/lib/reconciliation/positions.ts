@@ -76,19 +76,42 @@ export function generatePositionName(
   }
 }
 
+// Position type for better categorization
+export type PositionType = 'lp' | 'perpetual' | 'lending' | 'staking' | 'bridge' | 'swap' | 'unknown';
+
 // Extract position info from a transaction
-export function extractPositionInfo(tx: Transaction): {
+export function extractPositionInfo(tx: Transaction, tokenDict?: Record<string, { symbol?: string }>): {
   chain: string;
   protocol: string;
   positionKey?: string;
   tokenPair?: string;
+  positionType: PositionType;
 } {
   const chain = tx.chain || 'unknown';
   const protocol = tx.project_id || 'unknown';
+  const cateId = tx.cate_id || '';
+  const txName = tx.tx?.name || '';
   
-  // Try to extract position key from various sources
   let positionKey: string | undefined;
   let tokenPair: string | undefined;
+  let positionType: PositionType = 'unknown';
+  
+  // Detect position type from protocol and transaction category
+  if (protocol.includes('gmx')) {
+    positionType = 'perpetual';
+  } else if (protocol.includes('uniswap') || protocol.includes('pancake') || protocol.includes('sushi')) {
+    positionType = 'lp';
+  } else if (protocol.includes('aave') || protocol.includes('compound') || protocol.includes('morpho')) {
+    positionType = 'lending';
+  } else if (protocol.includes('lido') || protocol.includes('rocket') || protocol.includes('eigen')) {
+    positionType = 'staking';
+  } else if (protocol.includes('bridge') || protocol.includes('socket') || protocol.includes('across')) {
+    positionType = 'bridge';
+  } else if (cateId === 'swap' || txName.includes('swap')) {
+    positionType = 'swap';
+  } else if (cateId.includes('liquidity') || txName.includes('Liquidity')) {
+    positionType = 'lp';
+  }
   
   // Check for NFT position (Uniswap V3 style)
   if (tx.receives) {
@@ -100,29 +123,35 @@ export function extractPositionInfo(tx: Transaction): {
     }
   }
   
-  // Extract token pair from sends/receives
+  // Extract token pair from sends/receives using tokenDict for proper symbols
   const tokens = new Set<string>();
   for (const send of tx.sends || []) {
     if (send.token_id) {
-      // Extract symbol from token_id or use first part
-      const symbol = send.token_id.split(':').pop()?.toUpperCase() || send.token_id.slice(0, 6);
-      tokens.add(symbol);
+      const tokenInfo = tokenDict?.[send.token_id];
+      const symbol = tokenInfo?.symbol || send.token_id.split(':').pop()?.toUpperCase() || '???';
+      // Skip spam tokens and very long symbols
+      if (symbol.length <= 10 && !symbol.includes('.com') && !symbol.includes('x.com')) {
+        tokens.add(symbol);
+      }
     }
   }
   for (const recv of tx.receives || []) {
     if (recv.token_id && !recv.token_id.includes('nft')) {
-      const symbol = recv.token_id.split(':').pop()?.toUpperCase() || recv.token_id.slice(0, 6);
-      tokens.add(symbol);
+      const tokenInfo = tokenDict?.[recv.token_id];
+      const symbol = tokenInfo?.symbol || recv.token_id.split(':').pop()?.toUpperCase() || '???';
+      if (symbol.length <= 10 && !symbol.includes('.com') && !symbol.includes('x.com')) {
+        tokens.add(symbol);
+      }
     }
   }
   
   if (tokens.size === 2) {
-    tokenPair = Array.from(tokens).join('/');
+    tokenPair = Array.from(tokens).sort().join('/');
   } else if (tokens.size === 1) {
     tokenPair = Array.from(tokens)[0];
   }
   
-  return { chain, protocol, positionKey, tokenPair };
+  return { chain, protocol, positionKey, tokenPair, positionType };
 }
 
 
@@ -341,6 +370,7 @@ export interface PositionSuggestion {
   protocolName?: string;
   positionKey?: string;
   tokenPair?: string;
+  positionType: PositionType;
   txKeys: string[];
   transactionCount: number;
   confidence: 'high' | 'medium' | 'low';
@@ -350,7 +380,8 @@ export interface PositionSuggestion {
 export function suggestPositions(
   transactions: Transaction[],
   store: ReconciliationStore & PositionStore,
-  projectDict: Record<string, { name: string }> = {}
+  projectDict: Record<string, { name: string }> = {},
+  tokenDict: Record<string, { symbol?: string }> = {}
 ): PositionSuggestion[] {
   // Group transactions by position characteristics
   const groups = new Map<string, {
@@ -359,6 +390,7 @@ export function suggestPositions(
     protocolName?: string;
     positionKey?: string;
     tokenPair?: string;
+    positionType: PositionType;
     txKeys: string[];
   }>();
   
@@ -372,8 +404,14 @@ export function suggestPositions(
     // Skip hidden transactions
     if (overlay?.hidden) continue;
     
-    // Extract position info
-    const info = extractPositionInfo(tx);
+    // Skip approve transactions (they should be bundled with their action)
+    if (tx.cate_id === 'approve') continue;
+    
+    // Skip deploy transactions (usually spam)
+    if (tx.cate_id === 'deploy') continue;
+    
+    // Extract position info with tokenDict for better symbol resolution
+    const info = extractPositionInfo(tx, tokenDict);
     const protocolName = projectDict[info.protocol]?.name;
     
     // Create grouping key - prioritize positionKey for high confidence
@@ -384,10 +422,10 @@ export function suggestPositions(
       groupKey = `${info.protocol}:${info.chain}:pos:${info.positionKey}`;
       confidence = 'high';
     } else if (info.tokenPair && info.protocol !== 'unknown') {
-      groupKey = `${info.protocol}:${info.chain}:pair:${info.tokenPair}`;
+      groupKey = `${info.protocol}:${info.chain}:${info.positionType}:${info.tokenPair}`;
       confidence = 'medium';
     } else if (info.protocol !== 'unknown') {
-      groupKey = `${info.protocol}:${info.chain}:proto`;
+      groupKey = `${info.protocol}:${info.chain}:${info.positionType}`;
       confidence = 'low';
     } else {
       continue; // Skip ungroupable transactions
@@ -401,6 +439,7 @@ export function suggestPositions(
         protocolName,
         positionKey: info.positionKey,
         tokenPair: info.tokenPair,
+        positionType: info.positionType,
         txKeys: [],
       });
     }
@@ -416,7 +455,7 @@ export function suggestPositions(
     if (group.txKeys.length < 2) continue;
     
     const confidence = key.includes(':pos:') ? 'high' 
-      : key.includes(':pair:') ? 'medium' 
+      : group.tokenPair ? 'medium' 
       : 'low';
     
     suggestions.push({
@@ -426,17 +465,31 @@ export function suggestPositions(
       protocolName: group.protocolName,
       positionKey: group.positionKey,
       tokenPair: group.tokenPair,
+      positionType: group.positionType,
       txKeys: group.txKeys,
       transactionCount: group.txKeys.length,
       confidence,
     });
   }
   
-  // Sort by confidence then transaction count
+  // Sort by confidence, then position type priority, then transaction count
+  const typeOrder: Record<PositionType, number> = {
+    lp: 0,
+    perpetual: 1,
+    lending: 2,
+    staking: 3,
+    bridge: 4,
+    swap: 5,
+    unknown: 6,
+  };
+  
   suggestions.sort((a, b) => {
     const confOrder = { high: 0, medium: 1, low: 2 };
     if (confOrder[a.confidence] !== confOrder[b.confidence]) {
       return confOrder[a.confidence] - confOrder[b.confidence];
+    }
+    if (typeOrder[a.positionType] !== typeOrder[b.positionType]) {
+      return typeOrder[a.positionType] - typeOrder[b.positionType];
     }
     return b.transactionCount - a.transactionCount;
   });
