@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
-import { TransactionList } from "@/components/TransactionList";
+import { TransactionListSortable } from "@/components/TransactionListSortable";
 import { FilterBar } from "@/components/FilterBar";
 import { QuickFilters } from "@/components/QuickFilters";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
@@ -463,7 +463,7 @@ export default function ReconcilePage() {
             )}
 
             {/* Transaction List */}
-            <TransactionList 
+            <TransactionListSortable 
               transactions={filteredTransactions}
               tokenDict={tokenDict}
               projectDict={projectDict}
