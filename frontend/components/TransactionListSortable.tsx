@@ -5,11 +5,12 @@ import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { type Transaction, type TokenMeta, type ProjectMeta } from "@/lib/api";
 import { TransactionRowCompact } from "./TransactionRowCompact";
 import { getTxKey } from "@/lib/reconciliation/storage";
-import type { Position } from "@/lib/reconciliation/positions";
-import { getTransactionSuggestion } from "@/lib/reconciliation/naming";
 
+// Sort direction type
 type SortDirection = 'asc' | 'desc' | null;
-type SortColumn = 'date' | 'chain' | 'type' | 'protocol' | 'amount' | 'position';
+
+// Sortable column keys
+type SortColumn = 'date' | 'chain' | 'type' | 'protocol' | 'amount';
 
 interface SortState {
   column: SortColumn | null;
@@ -21,19 +22,15 @@ interface TransactionListProps {
   tokenDict: Record<string, TokenMeta>;
   projectDict: Record<string, ProjectMeta>;
   chainNames: Record<string, string>;
-  positions: Position[];
-  txPositionMap: Record<string, string>; // txKey -> positionId
   hiddenTxKeys?: Set<string>;
   showHidden?: boolean;
   onHide?: (chain: string, txHash: string) => void;
   onUnhide?: (chain: string, txHash: string) => void;
-  onAssignPosition?: (chain: string, txHash: string, positionId: string) => void;
-  onCreatePosition?: (chain: string, txHash: string, name: string) => void;
-  onUnassignPosition?: (chain: string, txHash: string) => void;
   title?: string;
   emptyMessage?: string;
 }
 
+// Calculate USD value for a transaction
 function calculateTxValue(tx: Transaction, tokenDict: Record<string, TokenMeta>): number {
   let total = 0;
   for (const recv of tx.receives || []) {
@@ -47,6 +44,7 @@ function calculateTxValue(tx: Transaction, tokenDict: Record<string, TokenMeta>)
   return total;
 }
 
+// Column header component with sort indicator
 function SortableHeader({ 
   label, 
   column, 
@@ -89,36 +87,38 @@ export function TransactionListSortable({
   tokenDict,
   projectDict,
   chainNames,
-  positions,
-  txPositionMap,
   hiddenTxKeys = new Set(),
   showHidden = false,
   onHide,
   onUnhide,
-  onAssignPosition,
-  onCreatePosition,
-  onUnassignPosition,
   title = "Transactions",
   emptyMessage = "No transactions found"
 }: TransactionListProps) {
+  // Sort state - default to date descending (newest first)
   const [sort, setSort] = useState<SortState>({ column: 'date', direction: 'desc' });
   
+  // Handle sort toggle
   const handleSort = (column: SortColumn) => {
     setSort(prev => {
       if (prev.column === column) {
+        // Cycle: desc -> asc -> null -> desc
         if (prev.direction === 'desc') return { column, direction: 'asc' };
         if (prev.direction === 'asc') return { column: null, direction: null };
         return { column, direction: 'desc' };
       }
+      // New column, start with desc
       return { column, direction: 'desc' };
     });
   };
 
+  // Filter and sort transactions
   const sortedTransactions = useMemo(() => {
+    // First filter
     let filtered = showHidden 
       ? transactions 
       : transactions.filter(tx => !hiddenTxKeys.has(getTxKey(tx.chain, tx.id)));
     
+    // Then sort
     if (sort.column && sort.direction) {
       const dir = sort.direction === 'asc' ? 1 : -1;
       
@@ -126,88 +126,130 @@ export function TransactionListSortable({
         switch (sort.column) {
           case 'date':
             return (a.time_at - b.time_at) * dir;
+          
           case 'chain':
-            return (chainNames[a.chain] || a.chain).localeCompare(chainNames[b.chain] || b.chain) * dir;
+            const chainA = chainNames[a.chain] || a.chain;
+            const chainB = chainNames[b.chain] || b.chain;
+            return chainA.localeCompare(chainB) * dir;
+          
           case 'type':
-            return (a.cate_id || a.tx?.name || '').localeCompare(b.cate_id || b.tx?.name || '') * dir;
+            const typeA = a.cate_id || a.tx?.name || '';
+            const typeB = b.cate_id || b.tx?.name || '';
+            return typeA.localeCompare(typeB) * dir;
+          
           case 'protocol':
-            return (projectDict[a.project_id || '']?.name || '').localeCompare(projectDict[b.project_id || '']?.name || '') * dir;
+            const protoA = projectDict[a.project_id || '']?.name || a.project_id || '';
+            const protoB = projectDict[b.project_id || '']?.name || b.project_id || '';
+            return protoA.localeCompare(protoB) * dir;
+          
           case 'amount':
-            return (calculateTxValue(a, tokenDict) - calculateTxValue(b, tokenDict)) * dir;
-          case 'position':
-            const posA = positions.find(p => p.id === txPositionMap[getTxKey(a.chain, a.id)])?.name || '';
-            const posB = positions.find(p => p.id === txPositionMap[getTxKey(b.chain, b.id)])?.name || '';
-            return posA.localeCompare(posB) * dir;
+            const valA = calculateTxValue(a, tokenDict);
+            const valB = calculateTxValue(b, tokenDict);
+            return (valA - valB) * dir;
+          
           default:
             return 0;
         }
       });
     }
+    
     return filtered;
-  }, [transactions, hiddenTxKeys, showHidden, sort, chainNames, projectDict, tokenDict, positions, txPositionMap]);
+  }, [transactions, hiddenTxKeys, showHidden, sort, chainNames, projectDict, tokenDict]);
   
-  const hiddenCount = hiddenTxKeys.size;
-  const assignedCount = sortedTransactions.filter(tx => txPositionMap[getTxKey(tx.chain, tx.id)]).length;
-  const unassignedCount = sortedTransactions.length - assignedCount;
+  const hiddenCount = transactions.length - (showHidden 
+    ? transactions.length 
+    : transactions.filter(tx => !hiddenTxKeys.has(getTxKey(tx.chain, tx.id))).length);
   
   if (sortedTransactions.length === 0) {
     return (
-      <div className="p-8 text-center">
+      <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-8 text-center">
         <p className="text-[#8B949E]">{emptyMessage}</p>
+        {hiddenCount > 0 && (
+          <p className="text-[#8B949E] text-sm mt-2">
+            ({hiddenCount} hidden transaction{hiddenCount !== 1 ? 's' : ''})
+          </p>
+        )}
       </div>
     );
   }
 
+
   return (
-    <div>
-      {/* Header with stats */}
-      {title && (
-        <div className="px-4 py-3 border-b border-[#21262D] flex items-center justify-between">
-          <h3 className="text-[#E6EDF3] font-semibold">{title}</h3>
-          <div className="flex items-center gap-4 text-sm">
-            <span className="text-[#3FB950]">{assignedCount} assigned</span>
-            <span className="text-[#F0B90B]">{unassignedCount} unassigned</span>
-            {hiddenCount > 0 && <span className="text-[#8B949E]">{hiddenCount} hidden</span>}
-          </div>
+    <div className="bg-[#161B22] rounded-lg border border-[#21262D]">
+      {/* Header with title and count */}
+      <div className="px-4 py-3 border-b border-[#21262D] flex items-center justify-between">
+        <h3 className="text-[#E6EDF3] font-semibold">{title}</h3>
+        <div className="flex items-center gap-3">
+          {hiddenCount > 0 && (
+            <span className="text-[#8B949E] text-sm">
+              {hiddenCount} hidden
+            </span>
+          )}
+          <span className="text-[#8B949E] text-sm">
+            {sortedTransactions.length} transaction{sortedTransactions.length !== 1 ? 's' : ''}
+          </span>
         </div>
-      )}
+      </div>
       
       {/* Column headers */}
-      <div className="px-4 py-2 border-b border-[#21262D] bg-[#0D1117] flex items-center gap-3">
-        <SortableHeader label="Date" column="date" currentSort={sort} onSort={handleSort} className="w-20" />
-        <SortableHeader label="Chain" column="chain" currentSort={sort} onSort={handleSort} className="w-16" />
-        <SortableHeader label="Type" column="type" currentSort={sort} onSort={handleSort} className="w-24" />
-        <SortableHeader label="Protocol" column="protocol" currentSort={sort} onSort={handleSort} className="w-24" />
-        <span className="w-40 text-xs font-medium uppercase tracking-wide text-[#8B949E]">Tokens</span>
-        <SortableHeader label="Amount" column="amount" currentSort={sort} onSort={handleSort} className="w-20 justify-end" />
-        <SortableHeader label="Position" column="position" currentSort={sort} onSort={handleSort} className="flex-1 min-w-[140px]" />
-        <span className="w-8" />
+      <div className="px-4 py-2 border-b border-[#21262D] bg-[#0D1117] flex items-center gap-4">
+        <SortableHeader 
+          label="Date" 
+          column="date" 
+          currentSort={sort} 
+          onSort={handleSort}
+          className="w-24"
+        />
+        <SortableHeader 
+          label="Chain" 
+          column="chain" 
+          currentSort={sort} 
+          onSort={handleSort}
+          className="w-20"
+        />
+        <SortableHeader 
+          label="Type" 
+          column="type" 
+          currentSort={sort} 
+          onSort={handleSort}
+          className="w-28"
+        />
+        <SortableHeader 
+          label="Protocol" 
+          column="protocol" 
+          currentSort={sort} 
+          onSort={handleSort}
+          className="w-28"
+        />
+        <span className="flex-1 text-xs font-medium uppercase tracking-wide text-[#8B949E]">
+          Tokens
+        </span>
+        <SortableHeader 
+          label="Amount" 
+          column="amount" 
+          currentSort={sort} 
+          onSort={handleSort}
+          className="w-24 justify-end"
+        />
+        <span className="w-10 text-xs font-medium uppercase tracking-wide text-[#8B949E] text-right">
+          
+        </span>
       </div>
       
       {/* Transaction rows */}
       <div className="divide-y divide-[#21262D]">
-        {sortedTransactions.map((tx, idx) => {
-          const txKey = getTxKey(tx.chain, tx.id);
-          const suggestion = getTransactionSuggestion(tx, positions, tokenDict);
-          
-          return (
-            <TransactionRowCompact 
-              key={`${tx.id}-${idx}`} 
-              transaction={tx}
-              tokenDict={tokenDict}
-              projectDict={projectDict}
-              chainNames={chainNames}
-              isHidden={hiddenTxKeys.has(txKey)}
-              positionId={txPositionMap[txKey]}
-              suggestion={suggestion}
-              onHide={onHide}
-              onUnhide={onUnhide}
-              onAssignPosition={onAssignPosition}
-              onCreatePosition={onCreatePosition}
-              onUnassignPosition={onUnassignPosition}
-            />
-          );
-        })}
+        {sortedTransactions.map((tx, idx) => (
+          <TransactionRowCompact 
+            key={`${tx.id}-${idx}`} 
+            transaction={tx}
+            tokenDict={tokenDict}
+            projectDict={projectDict}
+            chainNames={chainNames}
+            isHidden={hiddenTxKeys.has(getTxKey(tx.chain, tx.id))}
+            onHide={onHide}
+            onUnhide={onUnhide}
+          />
+        ))}
       </div>
     </div>
   );

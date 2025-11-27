@@ -2,10 +2,7 @@
 
 import { useState } from "react";
 import { type Transaction, type TokenMeta, type ProjectMeta, formatCurrency } from "@/lib/api";
-import { MoreHorizontal, ExternalLink, Eye } from "lucide-react";
-import { PositionDropdown } from "./PositionDropdown";
-import type { Position } from "@/lib/reconciliation/positions";
-import type { TransactionSuggestion } from "@/lib/reconciliation/naming";
+import { MoreHorizontal, ExternalLink, Plus, FolderPlus, EyeOff, Eye } from "lucide-react";
 
 interface TransactionRowCompactProps {
   transaction: Transaction;
@@ -13,13 +10,8 @@ interface TransactionRowCompactProps {
   projectDict: Record<string, ProjectMeta>;
   chainNames: Record<string, string>;
   isHidden?: boolean;
-  positionId?: string;
-  suggestion: TransactionSuggestion;
   onHide?: (chain: string, txHash: string) => void;
   onUnhide?: (chain: string, txHash: string) => void;
-  onAssignPosition?: (chain: string, txHash: string, positionId: string) => void;
-  onCreatePosition?: (chain: string, txHash: string, name: string) => void;
-  onUnassignPosition?: (chain: string, txHash: string) => void;
 }
 
 // Chain explorer URLs
@@ -53,19 +45,22 @@ function formatDate(timestamp: number): string {
   });
 }
 
+function shortenHash(hash: string): string {
+  return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
+}
+
+function shortenAddress(addr: string): string {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+}
+
 export function TransactionRowCompact({ 
   transaction, 
   tokenDict, 
   projectDict,
   chainNames,
   isHidden = false,
-  positionId,
-  suggestion,
   onHide,
-  onUnhide,
-  onAssignPosition,
-  onCreatePosition,
-  onUnassignPosition,
+  onUnhide
 }: TransactionRowCompactProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   
@@ -86,10 +81,12 @@ export function TransactionRowCompact({
   const buildTokenSummary = () => {
     const parts: string[] = [];
     
+    // Receives first (tokens in)
     for (const recv of transaction.receives || []) {
       const token = tokenDict[recv.token_id];
       const symbol = token?.symbol || "???";
-      if (symbol.length > 20 || symbol.includes(".com")) continue;
+      // Skip spam-looking tokens
+      if (symbol.length > 20 || symbol.includes("x.com") || symbol.includes(".com")) continue;
       if (recv.amount > 0.0001) {
         const formatted = recv.amount >= 1000 
           ? `${(recv.amount / 1000).toFixed(1)}k` 
@@ -98,10 +95,11 @@ export function TransactionRowCompact({
       }
     }
     
+    // Sends (tokens out)
     for (const send of transaction.sends || []) {
       const token = tokenDict[send.token_id];
       const symbol = token?.symbol || "???";
-      if (symbol.length > 20 || symbol.includes(".com")) continue;
+      if (symbol.length > 20 || symbol.includes("x.com") || symbol.includes(".com")) continue;
       if (send.amount > 0.0001) {
         const formatted = send.amount >= 1000 
           ? `${(send.amount / 1000).toFixed(1)}k` 
@@ -114,7 +112,7 @@ export function TransactionRowCompact({
     if (parts.length > 3) return `${parts.slice(0, 3).join(", ")}...`;
     return parts.join(", ");
   };
-
+  
   // Calculate USD value
   const calculateUsdValue = () => {
     let total = 0;
@@ -134,42 +132,46 @@ export function TransactionRowCompact({
   const hasValue = Math.abs(usdValue) > 0.01;
   const isPositive = usdValue >= 0;
 
+
   return (
-    <div className={`flex items-center gap-3 px-4 py-2 hover:bg-[#1C2128] transition-colors ${isHidden ? 'opacity-50' : ''}`}>
-      {/* Date - w-20 */}
-      <div className="w-20 flex-shrink-0">
+    <div className={`flex items-center gap-4 px-4 py-2 hover:bg-[#1C2128] transition-colors ${isHidden ? 'opacity-50' : ''}`}>
+      {/* Date - w-24 */}
+      <div className="w-24 flex-shrink-0">
         <span className="text-[#E6EDF3] text-sm">{formatDate(transaction.time_at)}</span>
       </div>
       
-      {/* Chain - w-16 */}
-      <div className="w-16 flex-shrink-0">
+      {/* Chain - w-20 */}
+      <div className="w-20 flex-shrink-0">
         <span 
           className="text-xs font-medium px-2 py-0.5 rounded-full inline-block"
-          style={{ backgroundColor: `${chainColor}20`, color: chainColor }}
+          style={{ 
+            backgroundColor: `${chainColor}20`,
+            color: chainColor 
+          }}
         >
           {chainName}
         </span>
       </div>
       
-      {/* Type - w-24 */}
-      <div className="w-24 flex-shrink-0">
+      {/* Type - w-28 */}
+      <div className="w-28 flex-shrink-0">
         <span className="text-[#E6EDF3] text-sm truncate block">{actionType}</span>
       </div>
       
-      {/* Protocol - w-24 */}
-      <div className="w-24 flex-shrink-0">
+      {/* Protocol - w-28 */}
+      <div className="w-28 flex-shrink-0">
         <span className="text-[#58A6FF] text-sm truncate block">{projectName}</span>
       </div>
       
-      {/* Tokens - w-40 */}
-      <div className="w-40 flex-shrink-0">
+      {/* Tokens - flex-1 */}
+      <div className="flex-1 min-w-0">
         <span className="text-[#E6EDF3] text-sm truncate block" title={tokenSummary}>
           {tokenSummary}
         </span>
       </div>
       
-      {/* Amount - w-20 */}
-      <div className="w-20 flex-shrink-0 text-right">
+      {/* Amount - w-24 */}
+      <div className="w-24 flex-shrink-0 text-right">
         {hasValue ? (
           <span className={`text-sm font-medium ${isPositive ? "text-[#3FB950]" : "text-[#F85149]"}`}>
             {isPositive ? "+" : ""}{formatCurrency(usdValue)}
@@ -179,20 +181,8 @@ export function TransactionRowCompact({
         )}
       </div>
 
-      {/* Position - flex-1 (new!) */}
-      <div className="flex-1 min-w-[140px]">
-        <PositionDropdown
-          currentPositionId={positionId}
-          suggestion={suggestion}
-          onAssign={(posId) => onAssignPosition?.(chain, transaction.id, posId)}
-          onCreate={(name) => onCreatePosition?.(chain, transaction.id, name)}
-          onUnassign={() => onUnassignPosition?.(chain, transaction.id)}
-          onHide={() => onHide?.(chain, transaction.id)}
-        />
-      </div>
-
-      {/* Actions - w-8 */}
-      <div className="w-8 flex-shrink-0 relative">
+      {/* Actions - w-10 */}
+      <div className="w-10 flex-shrink-0 relative">
         <button
           onClick={() => setMenuOpen(!menuOpen)}
           className="p-1 rounded hover:bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3] transition-colors"
@@ -200,17 +190,41 @@ export function TransactionRowCompact({
           <MoreHorizontal className="w-4 h-4" />
         </button>
         
+        {/* Dropdown menu */}
         {menuOpen && (
           <>
             <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-            <div className="absolute right-0 top-6 z-20 bg-[#161B22] border border-[#30363D] rounded-lg shadow-lg py-1 min-w-[160px]">
-              {isHidden && (
+            <div className="absolute right-0 top-6 z-20 bg-[#161B22] border border-[#30363D] rounded-lg shadow-lg py-1 min-w-[180px]">
+              <button
+                onClick={() => setMenuOpen(false)}
+                className="w-full px-3 py-1.5 text-left text-sm text-[#E6EDF3] hover:bg-[#21262D] flex items-center gap-2"
+              >
+                <Plus className="w-3 h-3" />
+                Create Position
+              </button>
+              <button
+                onClick={() => setMenuOpen(false)}
+                className="w-full px-3 py-1.5 text-left text-sm text-[#E6EDF3] hover:bg-[#21262D] flex items-center gap-2"
+              >
+                <FolderPlus className="w-3 h-3" />
+                Create Strategy
+              </button>
+              <div className="border-t border-[#30363D] my-1" />
+              {isHidden ? (
                 <button
-                  onClick={() => { setMenuOpen(false); onUnhide?.(chain, transaction.id); }}
+                  onClick={() => { setMenuOpen(false); onUnhide?.(transaction.chain, transaction.id); }}
                   className="w-full px-3 py-1.5 text-left text-sm text-[#3FB950] hover:bg-[#21262D] flex items-center gap-2"
                 >
                   <Eye className="w-3 h-3" />
                   Unhide
+                </button>
+              ) : (
+                <button
+                  onClick={() => { setMenuOpen(false); onHide?.(transaction.chain, transaction.id); }}
+                  className="w-full px-3 py-1.5 text-left text-sm text-[#8B949E] hover:bg-[#21262D] flex items-center gap-2"
+                >
+                  <EyeOff className="w-3 h-3" />
+                  Hide
                 </button>
               )}
               <a

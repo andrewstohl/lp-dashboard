@@ -1,27 +1,18 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database, LayoutGrid, List } from "lucide-react";
+import { Wallet, Search, FileCheck2, Eye, EyeOff, RefreshCw, Database, List, Layers, Target } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionListSortable } from "@/components/TransactionListSortable";
 import { FilterBar } from "@/components/FilterBar";
 import { QuickFilters } from "@/components/QuickFilters";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
-import { PositionsView } from "@/components/PositionsView";
+import { Tabs, type Tab } from "@/components/Tabs";
 import {
   applyQuickFilters,
   calculateFilterStats,
   type FilterStats,
 } from "@/lib/transaction-filters";
-import {
-  bundleTransactions,
-  getBundleStats,
-  type TransactionBundle,
-} from "@/lib/transaction-bundling";
-import {
-  buildPositionRegistry,
-  type PositionRegistry,
-} from "@/lib/position-registry";
 import { PositionSuggestionsPanel } from "@/components/PositionSuggestionsPanel";
 import { CreatePositionModal } from "@/components/CreatePositionModal";
 import { 
@@ -101,14 +92,9 @@ export default function ReconcilePage() {
   const [hideApproves, setHideApproves] = useState(false);
   const [hideDeploys, setHideDeploys] = useState(false);
   const [hideDust, setHideDust] = useState(false);
-  
-  // Bundling state
-  const [enableBundling, setEnableBundling] = useState(true); // On by default
-  
-  // Position Registry state (new auto-matching system)
-  const [positionRegistry, setPositionRegistry] = useState<PositionRegistry | null>(null);
-  const [registryLoading, setRegistryLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<'positions' | 'transactions'>('positions');
+
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'transactions' | 'positions' | 'strategies'>('transactions');
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -218,26 +204,6 @@ export default function ReconcilePage() {
     }
   }, [transactions, reconciliationStore, projectDict]);
 
-  // Load position registry from subgraphs when wallet changes
-  useEffect(() => {
-    async function loadRegistry() {
-      if (!walletAddress || transactions.length === 0) return;
-      
-      setRegistryLoading(true);
-      try {
-        const registry = await buildPositionRegistry(walletAddress);
-        setPositionRegistry(registry);
-        console.log('Position Registry loaded:', registry.positions.length, 'positions,', Object.keys(registry.txToPosition).length, 'tx mappings');
-      } catch (err) {
-        console.error('Failed to load position registry:', err);
-      } finally {
-        setRegistryLoading(false);
-      }
-    }
-    
-    loadRegistry();
-  }, [walletAddress, transactions.length]);
-
   // Handle creating a position from suggestion
   const handleCreatePosition = (suggestion: PositionSuggestion) => {
     setSelectedSuggestion(suggestion);
@@ -332,138 +298,6 @@ export default function ReconcilePage() {
     setStrategies(getStrategies(updatedStore));
   };
 
-  // Handle inline position assignment from transaction row
-  const handleAssignPosition = (chain: string, txHash: string, positionId: string) => {
-    if (!reconciliationStore) return;
-    
-    const txKey = `${chain}:${txHash}`;
-    const storeWithPositions = ensurePositionStore(reconciliationStore);
-    
-    // Update transaction overlay
-    const updatedStore = {
-      ...storeWithPositions,
-      transactions: {
-        ...storeWithPositions.transactions,
-        [txKey]: {
-          ...storeWithPositions.transactions[txKey],
-          txKey,
-          hidden: storeWithPositions.transactions[txKey]?.hidden || false,
-          positionId,
-        },
-      },
-    };
-    
-    // Also update the position's txKeys array
-    if (positionId && updatedStore.positions[positionId]) {
-      const position = updatedStore.positions[positionId];
-      if (!position.txKeys.includes(txKey)) {
-        updatedStore.positions[positionId] = {
-          ...position,
-          txKeys: [...position.txKeys, txKey],
-          updatedAt: Date.now(),
-        };
-      }
-    }
-    
-    saveReconciliationStore(updatedStore);
-    setReconciliationStore(updatedStore);
-  };
-
-  // Handle inline position creation from transaction row
-  const handleInlineCreatePosition = (chain: string, txHash: string, name: string) => {
-    if (!reconciliationStore) return;
-    
-    const txKey = `${chain}:${txHash}`;
-    const storeWithPositions = ensurePositionStore(reconciliationStore);
-    
-    // Find the transaction to get protocol info
-    const tx = transactions.find(t => t.chain === chain && t.id === txHash);
-    if (!tx) return;
-    
-    // Create new position
-    const positionId = `pos_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const newPosition: Position = {
-      id: positionId,
-      name,
-      chain,
-      protocol: tx.project_id || 'unknown',
-      protocolName: projectDict[tx.project_id || '']?.name,
-      txKeys: [txKey],
-      status: 'open',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    
-    // Update store
-    const updatedStore = {
-      ...storeWithPositions,
-      positions: {
-        ...storeWithPositions.positions,
-        [positionId]: newPosition,
-      },
-      transactions: {
-        ...storeWithPositions.transactions,
-        [txKey]: {
-          ...storeWithPositions.transactions[txKey],
-          txKey,
-          hidden: storeWithPositions.transactions[txKey]?.hidden || false,
-          positionId,
-        },
-      },
-    };
-    
-    saveReconciliationStore(updatedStore);
-    setReconciliationStore(updatedStore);
-    setPositions(getPositions(updatedStore));
-    
-    // Recompute suggestions
-    const suggestions = suggestPositions(transactions, updatedStore, projectDict, tokenDict);
-    setPositionSuggestions(suggestions);
-  };
-
-  // Handle unassigning position from transaction
-  const handleUnassignPosition = (chain: string, txHash: string) => {
-    if (!reconciliationStore) return;
-    
-    const txKey = `${chain}:${txHash}`;
-    const storeWithPositions = ensurePositionStore(reconciliationStore);
-    const currentPositionId = storeWithPositions.transactions[txKey]?.positionId;
-    
-    // Update transaction overlay (remove positionId)
-    const { positionId: _, ...txOverlayWithoutPosition } = storeWithPositions.transactions[txKey] || { txKey, hidden: false };
-    
-    const updatedStore = {
-      ...storeWithPositions,
-      transactions: {
-        ...storeWithPositions.transactions,
-        [txKey]: txOverlayWithoutPosition,
-      },
-    };
-    
-    // Also remove from position's txKeys array
-    if (currentPositionId && updatedStore.positions[currentPositionId]) {
-      const position = updatedStore.positions[currentPositionId];
-      updatedStore.positions[currentPositionId] = {
-        ...position,
-        txKeys: position.txKeys.filter(k => k !== txKey),
-        updatedAt: Date.now(),
-      };
-    }
-    
-    saveReconciliationStore(updatedStore);
-    setReconciliationStore(updatedStore);
-  };
-
-  // Build txPositionMap for quick lookup
-  const txPositionMap: Record<string, string> = {};
-  if (reconciliationStore) {
-    for (const [txKey, overlay] of Object.entries(reconciliationStore.transactions || {})) {
-      if (overlay.positionId) {
-        txPositionMap[txKey] = overlay.positionId;
-      }
-    }
-  }
-
   // Build project names map from projectDict
   const projectNames = Object.fromEntries(
     Object.entries(projectDict).map(([id, info]) => [id, info.name])
@@ -486,15 +320,6 @@ export default function ReconcilePage() {
     ...calculateFilterStats(transactions, tokenDict),
     visible: filteredTransactions.length,
   };
-
-  // Compute bundles
-  const bundles = bundleTransactions(filteredTransactions, tokenDict);
-  const bundleStats = getBundleStats(bundles);
-
-  // When bundling is enabled, we show primary transactions only
-  const displayTransactions = enableBundling
-    ? bundles.map(b => b.primaryTx)
-    : filteredTransactions;
 
   return (
     <div className="min-h-screen bg-[#0D1117]">
@@ -566,13 +391,10 @@ export default function ReconcilePage() {
               hideApproves={hideApproves}
               hideDeploys={hideDeploys}
               hideDust={hideDust}
-              enableBundling={enableBundling}
-              bundleStats={bundleStats}
               onToggleSpam={() => setHideSpam(!hideSpam)}
               onToggleApproves={() => setHideApproves(!hideApproves)}
               onToggleDeploys={() => setHideDeploys(!hideDeploys)}
               onToggleDust={() => setHideDust(!hideDust)}
-              onToggleBundling={() => setEnableBundling(!enableBundling)}
             />
 
             {/* Summary Stats */}
@@ -583,89 +405,110 @@ export default function ReconcilePage() {
               hiddenTxKeys={hiddenTxKeys}
             />
 
-            {/* View Mode Toggle */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 bg-[#21262D] rounded-lg p-1">
-                <button
-                  onClick={() => setViewMode('positions')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    viewMode === 'positions'
-                      ? 'bg-[#238636] text-white'
-                      : 'text-[#8B949E] hover:text-[#E6EDF3]'
-                  }`}
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                  Positions View
-                </button>
-                <button
-                  onClick={() => setViewMode('transactions')}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    viewMode === 'transactions'
-                      ? 'bg-[#58A6FF] text-white'
-                      : 'text-[#8B949E] hover:text-[#E6EDF3]'
-                  }`}
-                >
-                  <List className="w-4 h-4" />
-                  Transactions View
-                </button>
-              </div>
-              
-              {viewMode === 'positions' && positionRegistry && (
-                <div className="text-sm text-[#8B949E]">
-                  Auto-matched {Object.keys(positionRegistry.txToPosition).length} of {transactions.length} transactions
+            {/* Tabbed Content */}
+            <div className="bg-[#161B22] rounded-lg border border-[#21262D] overflow-hidden">
+              <Tabs
+                tabs={[
+                  { id: 'transactions', label: 'Transactions', count: filteredTransactions.length, icon: <List className="w-4 h-4" /> },
+                  { id: 'positions', label: 'Positions', count: positions.length, icon: <Layers className="w-4 h-4" /> },
+                  { id: 'strategies', label: 'Strategies', count: strategies.length, icon: <Target className="w-4 h-4" /> },
+                ]}
+                activeTab={activeTab}
+                onTabChange={(tab) => setActiveTab(tab as typeof activeTab)}
+              />
+
+              {/* Transactions Tab */}
+              {activeTab === 'transactions' && (
+                <div>
+                  {/* Show Hidden Toggle */}
+                  {hiddenTxKeys.size > 0 && (
+                    <div className="flex justify-end px-4 pt-3">
+                      <button
+                        onClick={() => setShowHidden(!showHidden)}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                          showHidden 
+                            ? 'bg-[#58A6FF] text-[#0D1117]' 
+                            : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
+                        }`}
+                      >
+                        {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                        {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
+                      </button>
+                    </div>
+                  )}
+                  <TransactionListSortable 
+                    transactions={filteredTransactions}
+                    tokenDict={tokenDict}
+                    projectDict={projectDict}
+                    chainNames={chainNames}
+                    hiddenTxKeys={hiddenTxKeys}
+                    showHidden={showHidden}
+                    onHide={handleHide}
+                    onUnhide={handleUnhide}
+                    title=""
+                    emptyMessage="No transactions found for this wallet"
+                  />
+                </div>
+              )}
+
+              {/* Positions Tab */}
+              {activeTab === 'positions' && (
+                <div className="p-4 space-y-4">
+                  {positionSuggestions.length > 0 && (
+                    <PositionSuggestionsPanel
+                      suggestions={positionSuggestions}
+                      projectDict={projectDict}
+                      chainNames={chainNames}
+                      onCreatePosition={handleCreatePosition}
+                    />
+                  )}
+                  {positions.length > 0 ? (
+                    <PositionsStrategiesPanel
+                      positions={positions}
+                      strategies={[]}
+                      chainNames={chainNames}
+                      onCreateStrategy={() => {}}
+                      onDeletePosition={handleDeletePosition}
+                      onDeleteStrategy={() => {}}
+                    />
+                  ) : (
+                    <div className="text-center py-8 text-[#8B949E]">
+                      <Layers className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No positions created yet</p>
+                      <p className="text-sm mt-1">Create positions from transactions to track your DeFi activity</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Strategies Tab */}
+              {activeTab === 'strategies' && (
+                <div className="p-4">
+                  {strategies.length > 0 ? (
+                    <PositionsStrategiesPanel
+                      positions={[]}
+                      strategies={strategies}
+                      chainNames={chainNames}
+                      onCreateStrategy={() => setShowCreateStrategyModal(true)}
+                      onDeletePosition={() => {}}
+                      onDeleteStrategy={handleDeleteStrategy}
+                    />
+                  ) : (
+                    <div className="text-center py-8 text-[#8B949E]">
+                      <Target className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No strategies created yet</p>
+                      <p className="text-sm mt-1">Group positions into strategies for portfolio analysis</p>
+                      <button
+                        onClick={() => setShowCreateStrategyModal(true)}
+                        className="mt-4 px-4 py-2 bg-[#238636] text-white rounded-lg hover:bg-[#2ea043] transition-colors"
+                      >
+                        Create Strategy
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-
-            {/* Positions View (New!) */}
-            {viewMode === 'positions' && (
-              <PositionsView
-                registry={positionRegistry}
-                transactions={filteredTransactions}
-                tokenDict={tokenDict}
-                projectDict={projectDict}
-                isLoading={registryLoading}
-              />
-            )}
-
-            {/* Transaction List View (Legacy) */}
-            {viewMode === 'transactions' && (
-              <div className="bg-[#161B22] rounded-lg border border-[#21262D] overflow-hidden">
-                {/* Show Hidden Toggle */}
-                {hiddenTxKeys.size > 0 && (
-                  <div className="flex justify-end px-4 pt-3">
-                    <button
-                      onClick={() => setShowHidden(!showHidden)}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-                        showHidden 
-                          ? 'bg-[#58A6FF] text-[#0D1117]' 
-                          : 'bg-[#21262D] text-[#8B949E] hover:text-[#E6EDF3]'
-                      }`}
-                    >
-                      {showHidden ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
-                      {showHidden ? 'Showing Hidden' : `Show ${hiddenTxKeys.size} Hidden`}
-                    </button>
-                  </div>
-                )}
-                <TransactionListSortable 
-                  transactions={displayTransactions}
-                  tokenDict={tokenDict}
-                  projectDict={projectDict}
-                  chainNames={chainNames}
-                  positions={positions}
-                  txPositionMap={txPositionMap}
-                  hiddenTxKeys={hiddenTxKeys}
-                  showHidden={showHidden}
-                  onHide={handleHide}
-                  onUnhide={handleUnhide}
-                  onAssignPosition={handleAssignPosition}
-                  onCreatePosition={handleInlineCreatePosition}
-                  onUnassignPosition={handleUnassignPosition}
-                  title={enableBundling ? `Transactions (${bundles.length} bundles from ${filteredTransactions.length} txs)` : "Transactions"}
-                  emptyMessage="No transactions found for this wallet"
-                />
-              </div>
-            )}
           </div>
         ) : (
           <div className="bg-[#161B22] rounded-lg border border-[#21262D] p-12 text-center">
