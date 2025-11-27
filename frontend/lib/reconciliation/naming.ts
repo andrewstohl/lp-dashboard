@@ -42,9 +42,9 @@ export function formatPositionDate(timestamp: number): string {
 
 // Transaction types that indicate OPENING a new position
 const OPENING_TX_PATTERNS: Record<string, string[]> = {
-  // GMX - these create new positions
-  'arb_gmx2': ['createOrder', 'OrderCreated'],
-  // Uniswap - mint creates new LP
+  // GMX - batch creates orders (sends collateral to GMX)
+  'arb_gmx2': ['batch'],
+  // Uniswap - mint/increase creates or adds to LP
   'uniswap3': ['mint', 'increaseLiquidity'],
   'arb_uniswap3': ['mint', 'increaseLiquidity'],
   // Aave - supply/borrow opens position
@@ -58,7 +58,7 @@ const OPENING_TX_PATTERNS: Record<string, string[]> = {
 
 // Transaction types that indicate MODIFYING an existing position
 const MODIFYING_TX_PATTERNS: Record<string, string[]> = {
-  // GMX - these modify existing positions
+  // GMX - executeOrder is when order gets filled (could be open or close)
   'arb_gmx2': ['executeOrder', 'cancelOrder', 'updateOrder'],
   // Uniswap - collect/decrease modify existing
   'uniswap3': ['collect', 'decreaseLiquidity', 'burn'],
@@ -298,9 +298,10 @@ export function getTransactionSuggestion(
   const intent = getTransactionIntent(tx);
   const matchingPositions = findMatchingPositions(tx, positions, tokenDict);
   
-  // Only suggest new name for opening transactions with no existing match
+  // Generate suggested name for opening transactions
+  // Show suggestion if: it's an opening transaction AND (no positions exist OR no matching positions)
   let suggestedName: string | null = null;
-  if (intent === 'opening' && matchingPositions.length === 0) {
+  if (intent === 'opening') {
     const nameSuggestion = generatePositionName(tx, tokenDict, gmxDirection);
     suggestedName = nameSuggestion?.name || null;
   }
