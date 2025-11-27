@@ -6,6 +6,7 @@ import { Navigation } from "@/components/Navigation";
 import { TransactionsColumn } from "@/components/build/TransactionsColumn";
 import { PositionsColumn } from "@/components/build/PositionsColumn";
 import { StrategiesColumn } from "@/components/build/StrategiesColumn";
+import { CreateStrategyModal } from "@/components/build/CreateStrategyModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8004";
 
@@ -121,6 +122,7 @@ export default function BuildPage() {
   
   // Strategies (in-memory for now, Phase 7 will add persistence)
   const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [showCreateStrategy, setShowCreateStrategy] = useState(false);
 
   // Load cached wallet on mount
   useEffect(() => {
@@ -204,8 +206,65 @@ export default function BuildPage() {
   };
 
   const handleCreateStrategy = () => {
-    // TODO: Open create strategy modal (Phase 6)
-    console.log("Create strategy clicked - implement in Phase 6");
+    setShowCreateStrategy(true);
+  };
+
+  const handleStrategySubmit = (strategyData: {
+    name: string;
+    description?: string;
+    positions: Array<{ positionId: string; percentage: number }>;
+  }) => {
+    // Calculate total value from positions
+    const totalValue = strategyData.positions.reduce((sum, sp) => {
+      const pos = data?.positions.find((p) => p.id === sp.positionId);
+      return sum + (pos?.valueUsd || 0) * (sp.percentage / 100);
+    }, 0);
+
+    // Determine status based on positions
+    const hasOpenPosition = strategyData.positions.some((sp) => {
+      const pos = data?.positions.find((p) => p.id === sp.positionId);
+      return pos?.status === "open";
+    });
+
+    const newStrategy: Strategy = {
+      id: `strategy_${Date.now()}`,
+      name: strategyData.name,
+      description: strategyData.description,
+      status: hasOpenPosition ? "open" : "closed",
+      positionIds: strategyData.positions.map((p) => p.positionId),
+      totalValueUsd: totalValue,
+      createdAt: Date.now(),
+    };
+
+    setStrategies((prev) => [...prev, newStrategy]);
+    
+    // Save to localStorage for persistence across refreshes
+    const updated = [...strategies, newStrategy];
+    localStorage.setItem(`vora_strategies_${walletAddress}`, JSON.stringify(updated));
+  };
+
+  // Load strategies from localStorage when wallet changes
+  useEffect(() => {
+    if (walletAddress) {
+      const saved = localStorage.getItem(`vora_strategies_${walletAddress}`);
+      if (saved) {
+        try {
+          setStrategies(JSON.parse(saved));
+        } catch {
+          setStrategies([]);
+        }
+      } else {
+        setStrategies([]);
+      }
+    }
+  }, [walletAddress]);
+
+  const handleDeleteStrategy = (strategyId: string) => {
+    setStrategies((prev) => {
+      const updated = prev.filter((s) => s.id !== strategyId);
+      localStorage.setItem(`vora_strategies_${walletAddress}`, JSON.stringify(updated));
+      return updated;
+    });
   };
 
   // Get chain names from data or use defaults
@@ -353,11 +412,20 @@ export default function BuildPage() {
               strategies={strategies}
               positions={data?.positions || []}
               onCreateStrategy={handleCreateStrategy}
+              onDeleteStrategy={handleDeleteStrategy}
               isLoading={loading}
             />
           </div>
         )}
       </main>
+
+      {/* Create Strategy Modal */}
+      <CreateStrategyModal
+        isOpen={showCreateStrategy}
+        onClose={() => setShowCreateStrategy(false)}
+        onSubmit={handleStrategySubmit}
+        availablePositions={data?.positions || []}
+      />
     </div>
   );
 }

@@ -79,30 +79,30 @@ The Build page is a three-column workflow for constructing portfolios from raw t
 | 3.3 | Build closed positions | ✅ Done |
 | 3.4 | Position naming | ✅ Done |
 
-### Phase 4: Transactions Column UI 🔄 IN PROGRESS
+### Phase 4: Transactions Column UI ✅ COMPLETE
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 4.1 | TransactionsColumn.tsx component | ❌ Not started |
-| 4.2 | Transaction detail expansion | ❌ Not started |
+| 4.1 | TransactionsColumn.tsx component | ✅ Done |
+| 4.2 | Transaction detail expansion | ✅ Done |
 
-### Phase 5: Positions Column UI
-
-| Step | Description | Status |
-|------|-------------|--------|
-| 5.1 | PositionsColumn.tsx component | ❌ Not started |
-| 5.2 | Position expansion (show txs) | ❌ Not started |
-| 5.3 | Position actions (rename, unlink) | ❌ Not started |
-
-### Phase 6: Strategies Column UI
+### Phase 5: Positions Column UI ✅ COMPLETE
 
 | Step | Description | Status |
 |------|-------------|--------|
-| 6.1 | StrategiesColumn.tsx component | ❌ Not started |
-| 6.2 | Strategy creation modal | ❌ Not started |
-| 6.3 | Position assignment to strategy | ❌ Not started |
-| 6.4 | Strategy expansion | ❌ Not started |
-| 6.5 | Strategy actions | ❌ Not started |
+| 5.1 | PositionsColumn.tsx component | ✅ Done |
+| 5.2 | Position expansion (show txs) | ✅ Done |
+| 5.3 | Position actions (rename, unlink) | ⏸️ Deferred to Phase 7 |
+
+### Phase 6: Strategies Column UI 🔄 IN PROGRESS
+
+| Step | Description | Status |
+|------|-------------|--------|
+| 6.1 | StrategiesColumn.tsx component | ✅ Done |
+| 6.2 | Strategy creation modal | ✅ Done |
+| 6.3 | Position assignment to strategy | ✅ Done |
+| 6.4 | Strategy expansion | ✅ Done |
+| 6.5 | Strategy actions (delete) | ✅ Done |
 
 ### Phase 7: Persistence
 

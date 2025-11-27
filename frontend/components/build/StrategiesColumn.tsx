@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Plus, ChevronDown, ChevronRight, Layers } from "lucide-react";
+import { Plus, ChevronDown, ChevronRight, Layers, Trash2, MoreHorizontal } from "lucide-react";
 
 interface Strategy {
   id: string;
@@ -26,6 +26,7 @@ interface StrategiesColumnProps {
   strategies: Strategy[];
   positions: Position[];
   onCreateStrategy?: () => void;
+  onDeleteStrategy?: (strategyId: string) => void;
   isLoading?: boolean;
 }
 
@@ -33,9 +34,11 @@ export function StrategiesColumn({
   strategies,
   positions,
   onCreateStrategy,
+  onDeleteStrategy,
   isLoading = false,
 }: StrategiesColumnProps) {
   const [expandedStrategies, setExpandedStrategies] = useState<Set<string>>(new Set());
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
 
   const toggleExpand = (stratId: string) => {
     setExpandedStrategies((prev) => {
@@ -47,6 +50,13 @@ export function StrategiesColumn({
       }
       return next;
     });
+  };
+
+  const handleDelete = (strategyId: string) => {
+    if (onDeleteStrategy) {
+      onDeleteStrategy(strategyId);
+    }
+    setMenuOpen(null);
   };
 
   const getPositionById = (id: string) => positions.find((p) => p.id === id);
@@ -201,6 +211,22 @@ export function StrategiesColumn({
                               </span>
                             </div>
                           ))
+                        )}
+                        
+                        {/* Delete Strategy Button */}
+                        {onDeleteStrategy && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete strategy "${strategy.name}"?`)) {
+                                handleDelete(strategy.id);
+                              }
+                            }}
+                            className="mt-3 flex items-center gap-1.5 px-2 py-1.5 text-xs text-[#F85149] hover:bg-[#F8514933] rounded transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Delete Strategy
+                          </button>
                         )}
                       </div>
                     </div>
