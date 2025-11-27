@@ -165,6 +165,20 @@ Added ReconcileSummary component with:
 
 **Phase 2.0b (Frontend UI) Complete!**
 
+### Critical Bug Fixes (Nov 26, 2025)
+
+**Fix 1: Complete Transaction Discovery ✅**
+- Problem: Only querying 9 hardcoded chains, missing user's actual chains
+- Solution: Use `/user/used_chain_list` to detect ALL chains dynamically
+- Solution: Use `/user/all_history_list` for cross-chain queries
+- Result: 56 → 1318 transactions (23x more!)
+
+**Fix 2: SQLite Caching ✅**
+- Problem: Full fetch takes 60+ seconds per request
+- Solution: SQLite cache per wallet with incremental sync
+- Result: First load ~60s, subsequent loads ~1s (60x faster)
+- Files: `backend/services/transaction_cache.py`
+
 **Next up:** Phase 2.0c - Step 13: Position Management
 
 ---
