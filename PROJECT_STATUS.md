@@ -1,6 +1,6 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 26, 2025 (Phase 2.0a+b Complete: DeBank Discovery + Reconcile UI Steps 7-9)  
+> **Last Updated:** November 27, 2025 (Build Page Phase 1-3 Complete, Phase 4 Starting)  
 > **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
 > **Repository:** https://github.com/andrewstohl/lp-dashboard  
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
@@ -517,6 +517,80 @@ Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment 
 **Key Commits:**
 - `8d321c8` - Phase 2.0 Reconciliation System design documentation
 - `27f727e` - Phase 2.0a: Backend transaction fetching (adapters + API)
+
+---
+
+## 🔨 Build Page (NEW - November 27, 2025)
+
+**Design Document:** [docs/BUILD_PAGE_PLAN.md](docs/BUILD_PAGE_PLAN.md)
+
+**Overview:** Three-column workflow for constructing portfolios from raw transactions. Replaces the overly complex Reconcile page approach with a cleaner architecture.
+
+### Architecture
+
+| Column 1: Transactions | Column 2: Positions | Column 3: Strategies |
+|------------------------|---------------------|---------------------|
+| UNMATCHED transactions only | Auto-built from DeBank | User-defined groupings |
+| Expandable (show details) | Expandable (show txs) | Expandable (show positions) |
+| Click → assign to position | Click → assign to strategy | Click → view combined P&L |
+
+### Data Sources
+
+| Data | Source | Purpose |
+|------|--------|---------|
+| Transactions | DeBank `/user/all_history_list` | Complete discovery |
+| Open Positions | DeBank `/user/all_complex_protocol_list` | Position identification via `position_index` |
+| Historical Prices | CoinGecko | USD values at transaction time |
+| Closed Positions | Derived from unmatched transactions | Grouped by protocol+chain |
+
+### Implementation Status
+
+| Phase | Steps | Description | Status |
+|-------|-------|-------------|--------|
+| 1 | 1.1-1.3 | Foundation (page, prices, caching) | ✅ Complete |
+| 2 | 2.1-2.3 | Transaction discovery & MVT filtering | ✅ Complete |
+| 3 | 3.1-3.4 | Position discovery & building | ✅ Complete |
+| 4 | 4.1-4.2 | Transactions column UI | 🔄 In Progress |
+| 5 | 5.1-5.3 | Positions column UI | ❌ Not started |
+| 6 | 6.1-6.5 | Strategies column UI | ❌ Not started |
+| 7 | 7.1-7.3 | Persistence | ❌ Not started |
+| 8 | 8.1-8.3 | Integration & polish | ❌ Not started |
+
+### Current Results (Test Wallet, 6 months)
+
+| Metric | Value |
+|--------|-------|
+| Total transactions (after MVT filter) | 616 |
+| Hidden transactions | 569 (spam, dust, bridges, swaps, approvals) |
+| Total positions | 27 |
+| Open positions | 16 |
+| Closed positions | 11 |
+| Matched transactions | 563 (91.4%) |
+| Unmatched transactions | 53 |
+
+### Files Created
+
+**Backend:**
+- `backend/app/api/v1/build.py` - Build page API (1199 lines)
+- `backend/services/coingecko_prices.py` - Price enrichment (281 lines)
+- `backend/services/transaction_cache.py` - SQLite caching (334 lines)
+- `backend/services/discovery.py` - DeBank discovery (364 lines)
+
+**Frontend:**
+- `frontend/app/build/page.tsx` - Main Build page (364 lines)
+- `frontend/components/build/TransactionsColumn.tsx` - Left column (290 lines)
+- `frontend/components/build/PositionsColumn.tsx` - Middle column (429 lines)
+- `frontend/components/build/StrategiesColumn.tsx` - Right column (217 lines)
+
+### API Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/v1/build/transactions` | Filtered transactions |
+| `GET /api/v1/build/positions` | Open positions from DeBank |
+| `GET /api/v1/build/positions/with-transactions` | Main Build page endpoint |
+| `POST /api/v1/build/enrich-prices` | On-demand CoinGecko enrichment |
+| `GET /api/v1/build/cache-stats` | Cache statistics |
 
 ---
 

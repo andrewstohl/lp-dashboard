@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Table2, FileCheck2 } from "lucide-react";
+import { LayoutDashboard, Table2, FileCheck2, Hammer } from "lucide-react";
 
 export function Navigation() {
   const pathname = usePathname();
@@ -10,6 +10,7 @@ export function Navigation() {
   const navItems = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/ledger", label: "Ledger", icon: Table2 },
+    { href: "/build", label: "Build", icon: Hammer },
     { href: "/reconcile", label: "Reconcile", icon: FileCheck2 },
   ];
 
