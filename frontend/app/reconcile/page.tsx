@@ -6,6 +6,8 @@ import { Navigation } from "@/components/Navigation";
 import { TransactionList } from "@/components/TransactionList";
 import { FilterBar } from "@/components/FilterBar";
 import { ReconcileSummary } from "@/components/ReconcileSummary";
+import { PositionSuggestionsPanel } from "@/components/PositionSuggestionsPanel";
+import { CreatePositionModal } from "@/components/CreatePositionModal";
 import { 
   fetchTransactions, 
   type Transaction, 
@@ -21,6 +23,13 @@ import {
   getHiddenTxKeys,
   type ReconciliationStore
 } from "@/lib/reconciliation/storage";
+import {
+  suggestPositions,
+  ensurePositionStore,
+  type Position,
+  type PositionSuggestion,
+  type PositionStore,
+} from "@/lib/reconciliation/positions";
 
 export default function ReconcilePage() {
   const [walletAddress, setWalletAddress] = useState(() => {
@@ -48,6 +57,11 @@ export default function ReconcilePage() {
   const [reconciliationStore, setReconciliationStore] = useState<ReconciliationStore | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [hiddenTxKeys, setHiddenTxKeys] = useState<Set<string>>(new Set());
+
+  // Position state
+  const [positionSuggestions, setPositionSuggestions] = useState<PositionSuggestion[]>([]);
+  const [showCreatePositionModal, setShowCreatePositionModal] = useState(false);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<PositionSuggestion | null>(null);
 
   // Load reconciliation store when wallet changes
   useEffect(() => {
@@ -127,6 +141,61 @@ export default function ReconcilePage() {
 
   const handleForceRefresh = () => {
     fetchWithFilters(true);
+  };
+
+  // Compute position suggestions when transactions change
+  useEffect(() => {
+    if (transactions.length > 0 && reconciliationStore) {
+      const storeWithPositions = ensurePositionStore(reconciliationStore);
+      const suggestions = suggestPositions(transactions, storeWithPositions, projectDict);
+      setPositionSuggestions(suggestions);
+    } else {
+      setPositionSuggestions([]);
+    }
+  }, [transactions, reconciliationStore, projectDict]);
+
+  // Handle creating a position from suggestion
+  const handleCreatePosition = (suggestion: PositionSuggestion) => {
+    setSelectedSuggestion(suggestion);
+    setShowCreatePositionModal(true);
+  };
+
+  // Handle position save
+  const handlePositionSave = (position: Position) => {
+    if (!reconciliationStore) return;
+    
+    // The position was already created in the modal, we just need to update the store
+    const storeWithPositions = ensurePositionStore(reconciliationStore);
+    
+    // Add position to store
+    const updatedStore = {
+      ...storeWithPositions,
+      positions: {
+        ...storeWithPositions.positions,
+        [position.id]: position,
+      },
+    };
+    
+    // Update transaction overlays with position link
+    for (const txKey of position.txKeys) {
+      updatedStore.transactions[txKey] = {
+        ...updatedStore.transactions[txKey],
+        txKey,
+        hidden: updatedStore.transactions[txKey]?.hidden || false,
+        positionId: position.id,
+      };
+    }
+    
+    saveReconciliationStore(updatedStore);
+    setReconciliationStore(updatedStore);
+    
+    // Recompute suggestions
+    const suggestions = suggestPositions(transactions, updatedStore, projectDict);
+    setPositionSuggestions(suggestions);
+    
+    // Close modal
+    setShowCreatePositionModal(false);
+    setSelectedSuggestion(null);
   };
 
   // Build project names map from projectDict
@@ -232,6 +301,16 @@ export default function ReconcilePage() {
               </div>
             )}
             
+            {/* Position Suggestions */}
+            {positionSuggestions.length > 0 && (
+              <PositionSuggestionsPanel
+                suggestions={positionSuggestions}
+                projectDict={projectDict}
+                chainNames={chainNames}
+                onCreatePosition={handleCreatePosition}
+              />
+            )}
+            
             {/* Show Hidden Toggle */}
             {hiddenTxKeys.size > 0 && (
               <div className="flex justify-end">
@@ -274,6 +353,22 @@ export default function ReconcilePage() {
           </div>
         )}
       </main>
+
+      {/* Create Position Modal */}
+      {reconciliationStore && (
+        <CreatePositionModal
+          isOpen={showCreatePositionModal}
+          onClose={() => {
+            setShowCreatePositionModal(false);
+            setSelectedSuggestion(null);
+          }}
+          onSave={handlePositionSave}
+          suggestion={selectedSuggestion || undefined}
+          store={reconciliationStore}
+          projectDict={projectDict}
+          chainNames={chainNames}
+        />
+      )}
     </div>
   );
 }

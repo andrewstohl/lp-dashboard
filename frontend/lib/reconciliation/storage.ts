@@ -15,8 +15,9 @@ export interface TransactionOverlay {
   hidden: boolean;
   hiddenAt?: number;          // Timestamp when hidden
   hiddenReason?: 'scam' | 'irrelevant' | 'approval' | 'dust' | 'other';
-  // Future fields for reconciliation:
-  // positionId?: string;
+  // Position link
+  positionId?: string;
+  // Future fields:
   // strategyId?: string;
   // allocations?: Allocation[];
 }

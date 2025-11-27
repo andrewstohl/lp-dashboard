@@ -1,0 +1,516 @@
+/**
+ * Position Management
+ * 
+ * A Position represents a grouping of related transactions for a single DeFi position.
+ * Examples: Uniswap V3 LP position, GMX perpetual, Aave lending position
+ * 
+ * Positions can be:
+ * - Auto-detected from transaction data (project_id, position metadata)
+ * - Manually created by the user
+ * - Linked to Strategies for portfolio analysis
+ */
+
+import { getTxKey, type ReconciliationStore } from './storage';
+import type { Transaction } from '@/lib/api';
+
+// Position status based on transaction history
+export type PositionStatus = 'open' | 'closed' | 'partial';
+
+// Position interface
+export interface Position {
+  id: string;                    // Unique ID (uuid or auto-generated)
+  name: string;                  // Display name (e.g., "ETH/USDC LP #12345")
+  
+  // Protocol info
+  chain: string;                 // Primary chain (eth, arb, etc.)
+  protocol: string;              // Protocol ID (uniswap3, arb_gmx2, etc.)
+  protocolName?: string;         // Human readable name
+  
+  // Position identifiers (for auto-grouping)
+  positionKey?: string;          // External position ID (NFT ID, etc.)
+  tokenPair?: string;            // e.g., "ETH/USDC"
+  
+  // Linked transactions
+  txKeys: string[];              // Array of `${chain}:${txHash}` keys
+  
+  // Status
+  status: PositionStatus;
+  
+  // Strategy link (optional)
+  strategyId?: string;
+  
+  // Metadata
+  createdAt: number;
+  updatedAt: number;
+  notes?: string;
+}
+
+
+// Extended store with positions
+export interface PositionStore {
+  positions: Record<string, Position>;  // positionId -> Position
+}
+
+// Generate unique position ID
+export function generatePositionId(): string {
+  return `pos_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Generate position name from transactions
+export function generatePositionName(
+  protocol: string,
+  protocolName: string | undefined,
+  tokenPair: string | undefined,
+  positionKey: string | undefined
+): string {
+  const protoDisplay = protocolName || protocol;
+  
+  if (tokenPair && positionKey) {
+    return `${protoDisplay} ${tokenPair} #${positionKey.slice(-6)}`;
+  } else if (tokenPair) {
+    return `${protoDisplay} ${tokenPair}`;
+  } else if (positionKey) {
+    return `${protoDisplay} Position #${positionKey.slice(-6)}`;
+  } else {
+    return `${protoDisplay} Position`;
+  }
+}
+
+// Extract position info from a transaction
+export function extractPositionInfo(tx: Transaction): {
+  chain: string;
+  protocol: string;
+  positionKey?: string;
+  tokenPair?: string;
+} {
+  const chain = tx.chain || 'unknown';
+  const protocol = tx.project_id || 'unknown';
+  
+  // Try to extract position key from various sources
+  let positionKey: string | undefined;
+  let tokenPair: string | undefined;
+  
+  // Check for NFT position (Uniswap V3 style)
+  if (tx.receives) {
+    for (const recv of tx.receives) {
+      if (recv.token_id?.includes('nft')) {
+        positionKey = recv.token_id;
+        break;
+      }
+    }
+  }
+  
+  // Extract token pair from sends/receives
+  const tokens = new Set<string>();
+  for (const send of tx.sends || []) {
+    if (send.token_id) {
+      // Extract symbol from token_id or use first part
+      const symbol = send.token_id.split(':').pop()?.toUpperCase() || send.token_id.slice(0, 6);
+      tokens.add(symbol);
+    }
+  }
+  for (const recv of tx.receives || []) {
+    if (recv.token_id && !recv.token_id.includes('nft')) {
+      const symbol = recv.token_id.split(':').pop()?.toUpperCase() || recv.token_id.slice(0, 6);
+      tokens.add(symbol);
+    }
+  }
+  
+  if (tokens.size === 2) {
+    tokenPair = Array.from(tokens).join('/');
+  } else if (tokens.size === 1) {
+    tokenPair = Array.from(tokens)[0];
+  }
+  
+  return { chain, protocol, positionKey, tokenPair };
+}
+
+
+// ==================== CRUD Operations ====================
+
+// Create a new position
+export function createPosition(
+  store: ReconciliationStore & PositionStore,
+  params: {
+    name?: string;
+    chain: string;
+    protocol: string;
+    protocolName?: string;
+    positionKey?: string;
+    tokenPair?: string;
+    txKeys?: string[];
+    notes?: string;
+  }
+): { store: ReconciliationStore & PositionStore; position: Position } {
+  const id = generatePositionId();
+  const now = Date.now();
+  
+  const position: Position = {
+    id,
+    name: params.name || generatePositionName(
+      params.protocol,
+      params.protocolName,
+      params.tokenPair,
+      params.positionKey
+    ),
+    chain: params.chain,
+    protocol: params.protocol,
+    protocolName: params.protocolName,
+    positionKey: params.positionKey,
+    tokenPair: params.tokenPair,
+    txKeys: params.txKeys || [],
+    status: 'open',
+    createdAt: now,
+    updatedAt: now,
+    notes: params.notes,
+  };
+  
+  // Update transaction overlays with position link
+  const updatedTransactions = { ...store.transactions };
+  for (const txKey of position.txKeys) {
+    updatedTransactions[txKey] = {
+      ...updatedTransactions[txKey],
+      txKey,
+      hidden: updatedTransactions[txKey]?.hidden || false,
+      positionId: id,
+    };
+  }
+  
+  return {
+    store: {
+      ...store,
+      transactions: updatedTransactions,
+      positions: {
+        ...store.positions,
+        [id]: position,
+      },
+    },
+    position,
+  };
+}
+
+// Update a position
+export function updatePosition(
+  store: ReconciliationStore & PositionStore,
+  positionId: string,
+  updates: Partial<Pick<Position, 'name' | 'status' | 'strategyId' | 'notes'>>
+): ReconciliationStore & PositionStore {
+  const position = store.positions[positionId];
+  if (!position) return store;
+  
+  return {
+    ...store,
+    positions: {
+      ...store.positions,
+      [positionId]: {
+        ...position,
+        ...updates,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+}
+
+// Delete a position (unlinks transactions, doesn't delete them)
+export function deletePosition(
+  store: ReconciliationStore & PositionStore,
+  positionId: string
+): ReconciliationStore & PositionStore {
+  const position = store.positions[positionId];
+  if (!position) return store;
+  
+  // Remove position link from transactions
+  const updatedTransactions = { ...store.transactions };
+  for (const txKey of position.txKeys) {
+    if (updatedTransactions[txKey]) {
+      const { positionId: _, ...rest } = updatedTransactions[txKey] as any;
+      updatedTransactions[txKey] = rest;
+    }
+  }
+  
+  // Remove position
+  const { [positionId]: _, ...remainingPositions } = store.positions;
+  
+  return {
+    ...store,
+    transactions: updatedTransactions,
+    positions: remainingPositions,
+  };
+}
+
+
+// Add transactions to a position
+export function addTransactionsToPosition(
+  store: ReconciliationStore & PositionStore,
+  positionId: string,
+  txKeys: string[]
+): ReconciliationStore & PositionStore {
+  const position = store.positions[positionId];
+  if (!position) return store;
+  
+  // Update transaction overlays
+  const updatedTransactions = { ...store.transactions };
+  for (const txKey of txKeys) {
+    updatedTransactions[txKey] = {
+      ...updatedTransactions[txKey],
+      txKey,
+      hidden: updatedTransactions[txKey]?.hidden || false,
+      positionId,
+    };
+  }
+  
+  // Update position
+  const newTxKeys = [...new Set([...position.txKeys, ...txKeys])];
+  
+  return {
+    ...store,
+    transactions: updatedTransactions,
+    positions: {
+      ...store.positions,
+      [positionId]: {
+        ...position,
+        txKeys: newTxKeys,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+}
+
+// Remove transactions from a position
+export function removeTransactionsFromPosition(
+  store: ReconciliationStore & PositionStore,
+  positionId: string,
+  txKeys: string[]
+): ReconciliationStore & PositionStore {
+  const position = store.positions[positionId];
+  if (!position) return store;
+  
+  // Remove position link from transactions
+  const updatedTransactions = { ...store.transactions };
+  for (const txKey of txKeys) {
+    if (updatedTransactions[txKey]) {
+      const { positionId: _, ...rest } = updatedTransactions[txKey] as any;
+      updatedTransactions[txKey] = rest;
+    }
+  }
+  
+  // Update position
+  const txKeySet = new Set(txKeys);
+  const newTxKeys = position.txKeys.filter(k => !txKeySet.has(k));
+  
+  return {
+    ...store,
+    transactions: updatedTransactions,
+    positions: {
+      ...store.positions,
+      [positionId]: {
+        ...position,
+        txKeys: newTxKeys,
+        updatedAt: Date.now(),
+      },
+    },
+  };
+}
+
+
+// ==================== Auto-Grouping ====================
+
+// Suggested position grouping
+export interface PositionSuggestion {
+  key: string;                   // Grouping key (protocol:chain:positionKey or protocol:chain:tokenPair)
+  chain: string;
+  protocol: string;
+  protocolName?: string;
+  positionKey?: string;
+  tokenPair?: string;
+  txKeys: string[];
+  transactionCount: number;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+// Generate position suggestions from transactions
+export function suggestPositions(
+  transactions: Transaction[],
+  store: ReconciliationStore & PositionStore,
+  projectDict: Record<string, { name: string }> = {}
+): PositionSuggestion[] {
+  // Group transactions by position characteristics
+  const groups = new Map<string, {
+    chain: string;
+    protocol: string;
+    protocolName?: string;
+    positionKey?: string;
+    tokenPair?: string;
+    txKeys: string[];
+  }>();
+  
+  for (const tx of transactions) {
+    const txKey = getTxKey(tx.chain, tx.id);
+    
+    // Skip if already assigned to a position
+    const overlay = store.transactions[txKey];
+    if (overlay?.positionId) continue;
+    
+    // Skip hidden transactions
+    if (overlay?.hidden) continue;
+    
+    // Extract position info
+    const info = extractPositionInfo(tx);
+    const protocolName = projectDict[info.protocol]?.name;
+    
+    // Create grouping key - prioritize positionKey for high confidence
+    let groupKey: string;
+    let confidence: 'high' | 'medium' | 'low';
+    
+    if (info.positionKey) {
+      groupKey = `${info.protocol}:${info.chain}:pos:${info.positionKey}`;
+      confidence = 'high';
+    } else if (info.tokenPair && info.protocol !== 'unknown') {
+      groupKey = `${info.protocol}:${info.chain}:pair:${info.tokenPair}`;
+      confidence = 'medium';
+    } else if (info.protocol !== 'unknown') {
+      groupKey = `${info.protocol}:${info.chain}:proto`;
+      confidence = 'low';
+    } else {
+      continue; // Skip ungroupable transactions
+    }
+    
+    // Add to group
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        chain: info.chain,
+        protocol: info.protocol,
+        protocolName,
+        positionKey: info.positionKey,
+        tokenPair: info.tokenPair,
+        txKeys: [],
+      });
+    }
+    
+    groups.get(groupKey)!.txKeys.push(txKey);
+  }
+  
+  // Convert to suggestions array
+  const suggestions: PositionSuggestion[] = [];
+  
+  for (const [key, group] of groups) {
+    // Only suggest groups with 2+ transactions
+    if (group.txKeys.length < 2) continue;
+    
+    const confidence = key.includes(':pos:') ? 'high' 
+      : key.includes(':pair:') ? 'medium' 
+      : 'low';
+    
+    suggestions.push({
+      key,
+      chain: group.chain,
+      protocol: group.protocol,
+      protocolName: group.protocolName,
+      positionKey: group.positionKey,
+      tokenPair: group.tokenPair,
+      txKeys: group.txKeys,
+      transactionCount: group.txKeys.length,
+      confidence,
+    });
+  }
+  
+  // Sort by confidence then transaction count
+  suggestions.sort((a, b) => {
+    const confOrder = { high: 0, medium: 1, low: 2 };
+    if (confOrder[a.confidence] !== confOrder[b.confidence]) {
+      return confOrder[a.confidence] - confOrder[b.confidence];
+    }
+    return b.transactionCount - a.transactionCount;
+  });
+  
+  return suggestions;
+}
+
+
+// ==================== Helper Functions ====================
+
+// Get all positions for a wallet
+export function getPositions(store: PositionStore): Position[] {
+  return Object.values(store.positions || {});
+}
+
+// Get position by ID
+export function getPosition(store: PositionStore, positionId: string): Position | null {
+  return store.positions?.[positionId] || null;
+}
+
+// Get position for a transaction
+export function getPositionForTransaction(
+  store: ReconciliationStore & PositionStore,
+  txKey: string
+): Position | null {
+  const overlay = store.transactions[txKey];
+  if (!overlay?.positionId) return null;
+  return store.positions?.[overlay.positionId] || null;
+}
+
+// Get unassigned transaction count
+export function getUnassignedTransactionCount(
+  transactions: Transaction[],
+  store: ReconciliationStore & PositionStore
+): number {
+  let count = 0;
+  for (const tx of transactions) {
+    const txKey = getTxKey(tx.chain, tx.id);
+    const overlay = store.transactions[txKey];
+    if (!overlay?.hidden && !overlay?.positionId) {
+      count++;
+    }
+  }
+  return count;
+}
+
+// Ensure store has positions field
+export function ensurePositionStore(
+  store: ReconciliationStore
+): ReconciliationStore & PositionStore {
+  return {
+    ...store,
+    positions: (store as any).positions || {},
+  };
+}
+
+// Calculate position status from transactions
+export function calculatePositionStatus(
+  position: Position,
+  transactions: Transaction[]
+): PositionStatus {
+  // Build map of transactions by key
+  const txMap = new Map(
+    transactions.map(tx => [getTxKey(tx.chain, tx.id), tx])
+  );
+  
+  // Analyze position transactions
+  let hasAdd = false;
+  let hasRemove = false;
+  
+  for (const txKey of position.txKeys) {
+    const tx = txMap.get(txKey);
+    if (!tx) continue;
+    
+    const cateName = tx.cate_id || '';
+    
+    // Detect adds (mint, deposit, add liquidity)
+    if (cateName.includes('add') || cateName.includes('mint') || cateName.includes('deposit')) {
+      hasAdd = true;
+    }
+    
+    // Detect removes (burn, withdraw, remove liquidity)
+    if (cateName.includes('remove') || cateName.includes('burn') || cateName.includes('withdraw')) {
+      hasRemove = true;
+    }
+  }
+  
+  if (hasAdd && hasRemove) {
+    return 'partial'; // Position has been modified
+  } else if (hasRemove && !hasAdd) {
+    return 'closed'; // Only removals, likely closed
+  } else {
+    return 'open'; // Default to open
+  }
+}
