@@ -21,6 +21,7 @@ from backend.services.transaction_cache import get_cache
 from backend.services.coingecko_prices import get_price_service
 from backend.services.debank import get_debank_service
 from backend.app.api.v1.position_lifecycle import process_positions_with_lifecycle_detection
+from backend.app.api.v1.transaction_grouping import group_transactions, infer_flow_direction
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -170,6 +171,146 @@ def _is_overhead_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 
     return net_value < threshold_usd
 
 
+def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
+    """
+    Infer the flow direction and category of a transaction based on value movement.
+    
+    Returns dict with:
+    - direction: "increase" | "decrease" | "modify" | "overhead"
+    - net_value: Net USD value (positive = received, negative = sent)
+    - sends_value: Total USD value sent
+    - receives_value: Total USD value received
+    - primary_token: Main token involved (largest value)
+    """
+    receives_value = 0.0
+    sends_value = 0.0
+    primary_token = None
+    max_token_value = 0.0
+    
+    for token in tx.get("receives", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        value = amount * price
+        receives_value += value
+        
+        if value > max_token_value:
+            max_token_value = value
+            primary_token = {
+                "token_id": token_id,
+                "symbol": token_info.get("symbol") or token_info.get("optimized_symbol") or "?",
+                "amount": amount,
+                "value": value,
+                "direction": "in"
+            }
+    
+    for token in tx.get("sends", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        value = amount * price
+        sends_value += value
+        
+        if value > max_token_value:
+            max_token_value = value
+            primary_token = {
+                "token_id": token_id,
+                "symbol": token_info.get("symbol") or token_info.get("optimized_symbol") or "?",
+                "amount": amount,
+                "value": value,
+                "direction": "out"
+            }
+    
+    net_value = receives_value - sends_value
+    
+    # Determine direction
+    if abs(net_value) < 1.0:
+        direction = "overhead"
+    elif net_value > 0 and sends_value < 1.0:
+        direction = "decrease"  # Only receiving (closing/reducing position)
+    elif net_value < 0 and receives_value < 1.0:
+        direction = "increase"  # Only sending (opening/increasing position)
+    else:
+        direction = "modify"  # Both significant (rebalancing)
+    
+    return {
+        "direction": direction,
+        "net_value": net_value,
+        "sends_value": sends_value,
+        "receives_value": receives_value,
+        "primary_token": primary_token
+    }
+
+
+def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
+    """
+    Group transactions by chain > protocol > type > token.
+    
+    Returns nested dict structure with transactions and metadata per group.
+    """
+    groups = {}
+    
+    for tx in txs:
+        chain = tx.get("chain", "unknown")
+        project_id = tx.get("project_id", "") or "unknown"
+        
+        # Infer type from transaction name or category
+        tx_name = (tx.get("tx", {}).get("name") or "").lower()
+        cate_id = tx.get("cate_id", "")
+        
+        # Determine type
+        if any(kw in tx_name for kw in ["mint", "burn", "increaseliquidity", "decreaseliquidity", "collect"]):
+            tx_type = "lp"
+        elif any(kw in tx_name for kw in ["executeorder", "createorder", "cancelorder", "multicall"]) and "gmx" in project_id:
+            tx_type = "perpetual"
+        elif any(kw in tx_name for kw in ["deposit", "withdraw", "supply", "borrow", "repay"]):
+            tx_type = "yield"
+        else:
+            tx_type = "other"
+        
+        # Get flow info for primary token
+        flow = _infer_flow_direction(tx, token_dict)
+        primary_symbol = flow.get("primary_token", {}).get("symbol", "unknown") if flow.get("primary_token") else "unknown"
+        
+        # Build group key
+        group_key = f"{chain}|{project_id}|{tx_type}|{primary_symbol}"
+        
+        if group_key not in groups:
+            groups[group_key] = {
+                "chain": chain,
+                "protocol": project_id,
+                "type": tx_type,
+                "token": primary_symbol,
+                "transactions": [],
+                "total_in": 0.0,
+                "total_out": 0.0,
+                "latest_time": 0,
+                "is_open": False  # Will be set based on DeBank positions
+            }
+        
+        # Add flow data to transaction
+        tx["_flow"] = flow
+        
+        groups[group_key]["transactions"].append(tx)
+        groups[group_key]["total_in"] += flow["receives_value"]
+        groups[group_key]["total_out"] += flow["sends_value"]
+        
+        tx_time = tx.get("time_at", 0)
+        if tx_time > groups[group_key]["latest_time"]:
+            groups[group_key]["latest_time"] = tx_time
+    
+    # Sort groups by latest activity
+    sorted_groups = sorted(groups.values(), key=lambda g: -g["latest_time"])
+    
+    return {
+        "groups": sorted_groups,
+        "total_groups": len(sorted_groups),
+        "total_transactions": len(txs)
+    }
+
+
 def _categorize_transaction(tx: Dict) -> str:
     """
     Categorize transaction for Build page display.
@@ -228,6 +369,211 @@ def _categorize_transaction(tx: Dict) -> str:
         return "position"
     
     return "other"
+
+
+def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
+    """
+    Infer the flow direction of a transaction based on net value.
+    
+    Returns:
+        {
+            "direction": "increase" | "decrease" | "modify",
+            "netValue": float (positive = received, negative = sent),
+            "sendValue": float,
+            "receiveValue": float,
+        }
+    """
+    receives_value = 0.0
+    sends_value = 0.0
+    
+    for token in tx.get("receives", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        receives_value += amount * price
+    
+    for token in tx.get("sends", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        sends_value += amount * price
+    
+    net_value = receives_value - sends_value
+    
+    # Determine direction based on net flow
+    if net_value < -1:  # Significant money out
+        direction = "increase"  # Opening/increasing position
+    elif net_value > 1:  # Significant money in
+        direction = "decrease"  # Closing/reducing position
+    else:
+        direction = "modify"  # Rebalancing or minimal change
+    
+    return {
+        "direction": direction,
+        "netValue": round(net_value, 2),
+        "sendValue": round(sends_value, 2),
+        "receiveValue": round(receives_value, 2),
+    }
+
+
+def _infer_tx_position_type(tx: Dict, project_id: str) -> str:
+    """
+    Infer position type from transaction and project.
+    """
+    tx_name = (tx.get("tx", {}).get("name") or "").lower()
+    project_lower = project_id.lower()
+    
+    # GMX perpetuals
+    if "gmx" in project_lower:
+        # Check for LP vs perpetual
+        if "gm" in tx_name or "liquidity" in tx_name.lower():
+            return "lp"
+        return "perpetual"
+    
+    # Uniswap/PancakeSwap LP
+    if any(x in project_lower for x in ["uniswap", "pancake", "sushi", "curve"]):
+        return "lp"
+    
+    # Lending/Yield
+    if any(x in project_lower for x in ["euler", "aave", "compound", "silo", "morpho"]):
+        return "yield"
+    
+    # Staking
+    if "stake" in tx_name or "staking" in project_lower:
+        return "staking"
+    
+    return "other"
+
+
+def _extract_token_from_tx(tx: Dict, token_dict: Dict) -> str:
+    """
+    Extract the primary token symbol from a transaction.
+    Looks at the largest value token in sends or receives.
+    """
+    all_tokens = []
+    
+    for token in tx.get("sends", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        value = amount * price
+        if symbol and value > 0:
+            all_tokens.append((symbol, value))
+    
+    for token in tx.get("receives", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        value = amount * price
+        if symbol and value > 0:
+            all_tokens.append((symbol, value))
+    
+    if not all_tokens:
+        return "Unknown"
+    
+    # Return the token with highest value
+    all_tokens.sort(key=lambda x: -x[1])
+    return all_tokens[0][0]
+
+
+def _group_transactions(
+    transactions: List[Dict],
+    token_dict: Dict,
+    open_position_keys: set = None
+) -> List[Dict]:
+    """
+    Group transactions by Network > Protocol > Type > Token.
+    
+    Returns list of groups, each with:
+    {
+        "id": unique group ID,
+        "chain": chain ID,
+        "chainName": display name,
+        "protocol": protocol ID,
+        "protocolName": display name,
+        "type": position type (lp, perpetual, yield, etc.),
+        "token": primary token symbol,
+        "displayName": human-readable group name,
+        "transactions": list of transactions,
+        "transactionCount": count,
+        "latestActivity": timestamp,
+        "isOpen": boolean (matches an open DeBank position),
+        "totalIn": total received value,
+        "totalOut": total sent value,
+        "netFlow": net value change,
+    }
+    """
+    groups = {}
+    
+    for tx in transactions:
+        chain = tx.get("chain", "unknown")
+        project_id = tx.get("project_id") or "unknown"
+        
+        # Infer type and token
+        pos_type = _infer_tx_position_type(tx, project_id)
+        token = _extract_token_from_tx(tx, token_dict)
+        
+        # Create group key
+        group_key = f"{chain}_{project_id}_{pos_type}_{token}".lower()
+        
+        if group_key not in groups:
+            # Clean up protocol name
+            protocol_name = project_id.replace("arb_", "").replace("eth_", "").replace("base_", "")
+            protocol_name = protocol_name.replace("_", " ").title()
+            
+            # Check if this matches an open position
+            is_open = open_position_keys and group_key in open_position_keys
+            
+            groups[group_key] = {
+                "id": group_key,
+                "chain": chain,
+                "chainName": DEFAULT_CHAIN_NAMES.get(chain, chain.upper()),
+                "protocol": project_id,
+                "protocolName": protocol_name,
+                "type": pos_type,
+                "token": token,
+                "displayName": f"{protocol_name} {pos_type.upper()} {token}",
+                "transactions": [],
+                "transactionCount": 0,
+                "latestActivity": 0,
+                "isOpen": is_open,
+                "totalIn": 0.0,
+                "totalOut": 0.0,
+                "netFlow": 0.0,
+            }
+        
+        # Add transaction to group
+        groups[group_key]["transactions"].append(tx)
+        groups[group_key]["transactionCount"] += 1
+        
+        # Update latest activity
+        tx_time = tx.get("time_at", 0)
+        if tx_time > groups[group_key]["latestActivity"]:
+            groups[group_key]["latestActivity"] = tx_time
+        
+        # Update totals
+        flow = _infer_flow_direction(tx, token_dict)
+        groups[group_key]["totalIn"] += flow["receiveValue"]
+        groups[group_key]["totalOut"] += flow["sendValue"]
+        groups[group_key]["netFlow"] += flow["netValue"]
+    
+    # Convert to list and sort by latest activity (most recent first)
+    result = list(groups.values())
+    result.sort(key=lambda x: -x["latestActivity"])
+    
+    # Round totals
+    for g in result:
+        g["totalIn"] = round(g["totalIn"], 2)
+        g["totalOut"] = round(g["totalOut"], 2)
+        g["netFlow"] = round(g["netFlow"], 2)
+    
+    return result
 
 
 def _filter_transactions(
@@ -460,6 +806,126 @@ def _parse_date(date_str: str) -> datetime:
             return datetime.fromisoformat(date_str)
     except ValueError:
         raise ValueError(f"Invalid date format: {date_str}")
+
+
+@router.get("/transactions/grouped")
+async def get_grouped_transactions(
+    wallet: str = Query(..., description="Wallet address"),
+    since: Optional[str] = Query(
+        "6m",
+        description="Start date (ISO format or relative like '30d', '6m')"
+    ),
+    force_refresh: bool = Query(False, description="Force refresh from DeBank")
+) -> Dict[str, Any]:
+    """
+    Get transactions grouped by Chain > Protocol > Type > Token.
+    
+    Each transaction includes flow direction inference:
+    - increase: Money going OUT (opening/adding to position)
+    - decrease: Money coming IN (closing/reducing position)
+    - modify: Both in and out (rebalancing)
+    - overhead: Negligible net value (filtered out)
+    
+    Groups are sorted by most recent activity.
+    """
+    try:
+        # Parse dates
+        until_dt = datetime.now()
+        since_dt = _parse_date(since) if since else (until_dt - timedelta(days=180))
+        
+        # Get discovery service
+        discovery = await get_discovery_service()
+        
+        # Discover transactions
+        result = await discovery.discover_transactions(
+            wallet_address=wallet,
+            chains=None,
+            since=since_dt,
+            until=until_dt,
+            force_refresh=force_refresh
+        )
+        
+        all_transactions = result["transactions"]
+        token_dict = result["token_dict"]
+        
+        # Enrich token_dict with current prices for any missing tokens
+        price_service = get_price_service()
+        missing_tokens = []
+        for tx in all_transactions:
+            for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
+                token_id = token.get("token_id", "")
+                if token_id and token_id not in token_dict:
+                    missing_tokens.append(token_id)
+        
+        if missing_tokens:
+            token_dict = await price_service.enrich_token_dict(token_dict, list(set(missing_tokens)))
+            logger.info(f"Enriched {len(missing_tokens)} missing token prices for grouped transactions")
+        
+        # Apply MVT filtering with overhead filter
+        filtered_transactions, hidden_counts = _filter_transactions(
+            all_transactions,
+            token_dict,
+            show_spam=False,
+            show_dust=False,
+            show_approvals=False,
+            show_bridges_swaps=False,
+            show_failed=False,
+            show_overhead=False,
+            overhead_threshold=1.0
+        )
+        
+        # Group transactions
+        project_dict = result.get("project_dict", {})
+        groups = group_transactions(filtered_transactions, token_dict, project_dict)
+        
+        # Get open positions from DeBank to mark groups as "open"
+        try:
+            debank = await get_debank_service()
+            positions_result = await debank.get_wallet_positions(wallet)
+            open_positions = positions_result.get("positions", [])
+            
+            # Build set of open protocol+chain+token combinations
+            open_keys = set()
+            for pos in open_positions:
+                protocol = (pos.get("protocol", "") or "").lower()
+                chain = pos.get("chain", "")
+                # Add any identifiable keys
+                if protocol and chain:
+                    open_keys.add(f"{chain}|{protocol}")
+            
+            # Mark groups as open if they match
+            for group in groups:
+                group_key = f"{group['chain']}|{group['protocol']}"
+                if group_key in open_keys:
+                    group["isOpen"] = True
+        except Exception as e:
+            logger.warning(f"Could not fetch open positions: {e}")
+        
+        return {
+            "status": "success",
+            "data": {
+                "groups": groups,
+                "totalGroups": len(groups),
+                "totalTransactions": len(filtered_transactions),
+                "wallet": wallet.lower(),
+                "tokenDict": token_dict,
+                "projectDict": project_dict,
+                "hiddenCounts": hidden_counts,
+                "filters": {
+                    "since": since_dt.isoformat(),
+                    "until": until_dt.isoformat(),
+                }
+            }
+        }
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
+    except Exception as e:
+        logger.exception(f"Error getting grouped transactions for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get grouped transactions", "message": str(e)}
+        )
 
 
 @router.post("/enrich-prices")
