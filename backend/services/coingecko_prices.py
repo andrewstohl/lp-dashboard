@@ -1,5 +1,5 @@
 import httpx
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 from datetime import datetime
 import asyncio
@@ -258,6 +258,107 @@ class CoinGeckoPriceService:
                     token["value_usd"] = price * amount
         
         return transaction
+
+    async def get_current_prices_batch(
+        self,
+        coingecko_ids: List[str]
+    ) -> Dict[str, float]:
+        """
+        Get current USD prices for multiple tokens in one API call.
+        
+        Args:
+            coingecko_ids: List of CoinGecko token IDs
+            
+        Returns:
+            Dict mapping coingecko_id -> price
+        """
+        if not coingecko_ids:
+            return {}
+            
+        try:
+            await self._rate_limit()
+            response = await self.client.get(
+                "/simple/price",
+                params={"ids": ",".join(coingecko_ids), "vs_currencies": "usd"}
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            return {cg_id: info.get("usd", 0) for cg_id, info in data.items()}
+            
+        except Exception as e:
+            logger.error(f"Error fetching batch prices: {e}")
+            return {}
+
+    async def enrich_token_dict(
+        self,
+        token_dict: Dict[str, Any],
+        token_addresses: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Enrich a token_dict with current prices for known tokens.
+        
+        For any token address that:
+        1. Is not in token_dict, OR
+        2. Is in token_dict but has no price
+        
+        This will add/update the entry with current price data.
+        
+        Args:
+            token_dict: Existing token dictionary from DeBank
+            token_addresses: List of token addresses to ensure have prices
+            
+        Returns:
+            Enriched token_dict
+        """
+        # Find which tokens need prices
+        tokens_needing_prices = {}  # address -> coingecko_id
+        
+        for addr in token_addresses:
+            addr_lower = addr.lower()
+            existing = token_dict.get(addr_lower) or token_dict.get(addr)
+            
+            # Check if we need to add/update this token
+            needs_price = False
+            if not existing:
+                needs_price = True
+            elif existing.get("price") is None or existing.get("price") == 0:
+                needs_price = True
+                
+            if needs_price:
+                # Check if it's a known token
+                cg_id = self._get_known_token_id(addr)
+                if cg_id:
+                    tokens_needing_prices[addr_lower] = cg_id
+        
+        if not tokens_needing_prices:
+            return token_dict
+            
+        # Get unique CoinGecko IDs
+        unique_cg_ids = list(set(tokens_needing_prices.values()))
+        
+        # Fetch prices in batch
+        prices = await self.get_current_prices_batch(unique_cg_ids)
+        
+        # Update token_dict
+        for addr, cg_id in tokens_needing_prices.items():
+            price = prices.get(cg_id, 0)
+            if price:
+                # Add or update entry
+                if addr not in token_dict:
+                    # Create minimal entry
+                    token_dict[addr] = {
+                        "id": addr,
+                        "symbol": cg_id.upper().replace("-", " "),
+                        "price": price,
+                        "is_verified": True,
+                    }
+                else:
+                    token_dict[addr]["price"] = price
+                    
+                logger.debug(f"Enriched token {addr} with price ${price:.4f}")
+        
+        return token_dict
 
 
 # Global service instance

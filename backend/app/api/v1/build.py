@@ -12,7 +12,7 @@ Key features:
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import logging
 
@@ -137,6 +137,39 @@ def _is_dust_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 0.10
     return total_value > 0 and total_value < threshold_usd
 
 
+def _is_overhead_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 1.0) -> bool:
+    """
+    Detect overhead transactions - those with negligible net value.
+    
+    These are transactions like order placement, gas fees, etc. where the
+    net value moved is below the threshold. Real position changes involve
+    significant value movement.
+    
+    Calculates: abs(receives_value - sends_value) < threshold
+    """
+    receives_value = 0.0
+    sends_value = 0.0
+    
+    for token in tx.get("receives", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        receives_value += amount * price
+    
+    for token in tx.get("sends", []) or []:
+        token_id = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        token_info = token_dict.get(token_id, {})
+        price = token_info.get("price", 0) or 0
+        sends_value += amount * price
+    
+    net_value = abs(receives_value - sends_value)
+    
+    # If net value is below threshold, it's overhead
+    return net_value < threshold_usd
+
+
 def _categorize_transaction(tx: Dict) -> str:
     """
     Categorize transaction for Build page display.
@@ -205,8 +238,10 @@ def _filter_transactions(
     show_approvals: bool = False,
     show_bridges_swaps: bool = False,
     show_failed: bool = False,
+    show_overhead: bool = False,
+    overhead_threshold: float = 1.0,
     categories: Optional[List[str]] = None
-) -> List[Dict]:
+) -> Tuple[List[Dict], Dict[str, int]]:
     """
     Filter transactions for Build page display.
     
@@ -216,6 +251,7 @@ def _filter_transactions(
     - Hide standalone approvals
     - Hide bridges and swaps (not positions)
     - Hide failed transactions
+    - Hide overhead transactions (net value < threshold)
     - Show only position-relevant transactions
     """
     filtered = []
@@ -224,7 +260,8 @@ def _filter_transactions(
         "dust": 0,
         "approval": 0,
         "bridge_swap": 0,
-        "failed": 0
+        "failed": 0,
+        "overhead": 0
     }
     
     for tx in transactions:
@@ -246,6 +283,11 @@ def _filter_transactions(
         # Skip failed transactions unless explicitly shown
         if not show_failed and _is_failed_transaction(tx):
             hidden_counts["failed"] += 1
+            continue
+        
+        # Skip overhead transactions (low net value) unless explicitly shown
+        if not show_overhead and _is_overhead_transaction(tx, token_dict, overhead_threshold):
+            hidden_counts["overhead"] += 1
             continue
         
         # Categorize transaction
@@ -881,6 +923,20 @@ async def get_positions_with_transactions(
         
         all_transactions = tx_result["transactions"]
         token_dict = tx_result["token_dict"]
+        
+        # Collect all token addresses from transactions for price enrichment
+        token_addresses = set()
+        for tx in all_transactions:
+            for send in (tx.get("sends") or []):
+                if send.get("token_id"):
+                    token_addresses.add(send["token_id"])
+            for recv in (tx.get("receives") or []):
+                if recv.get("token_id"):
+                    token_addresses.add(recv["token_id"])
+        
+        # Enrich token_dict with current prices for known tokens
+        price_service = get_price_service()
+        token_dict = await price_service.enrich_token_dict(token_dict, list(token_addresses))
         
         # Apply MVT filtering
         filtered_txs, _ = _filter_transactions(
