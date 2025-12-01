@@ -28,8 +28,27 @@ interface Transaction {
     token_id: string;
     amount: number;
   }>;
-  _category?: string;
-  _matched?: boolean;  // Whether this tx is linked to a position
+  _flowDirection?: "INCREASE" | "DECREASE" | "OVERHEAD";
+  _netValue?: number;
+  _totalIn?: number;
+  _totalOut?: number;
+}
+
+interface TransactionGroup {
+  groupKey: string;
+  chain: string;
+  protocol: string;
+  protocolName: string;
+  positionType: string;
+  tokens: string[];
+  tokensDisplay: string;
+  transactions: Transaction[];
+  transactionCount: number;
+  totalIn: number;
+  totalOut: number;
+  netValue: number;
+  latestActivity: number;
+  isOpen?: boolean;
 }
 
 interface TokenInfo {
@@ -118,6 +137,7 @@ export default function BuildPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<BuildData | null>(null);
+  const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
   const [positionFilter, setPositionFilter] = useState<"all" | "open" | "closed">("all");
   
   // Hidden transactions (persisted in localStorage)
@@ -156,41 +176,41 @@ export default function BuildPage() {
     setError(null);
     
     try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/positions/with-transactions?wallet=${address}&since=6m`
+      // Fetch grouped transactions
+      const groupedResponse = await fetch(
+        `${API_URL}/api/v1/build/transactions/grouped?wallet=${address}&since=6m`
       );
       
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+      if (!groupedResponse.ok) {
+        throw new Error(`API error: ${groupedResponse.status}`);
       }
       
-      const result = await response.json();
+      const groupedResult = await groupedResponse.json();
       
-      if (result.status === "success") {
-        // Mark transactions that are matched to positions
-        const matchedTxIds = new Set<string>();
-        (result.data.positions || []).forEach((pos: Position) => {
-          (pos.transactions || []).forEach((tx: Transaction) => {
-            matchedTxIds.add(tx.id);
-          });
-        });
+      if (groupedResult.status === "success") {
+        setTransactionGroups(groupedResult.data.groups || []);
         
-        // Add _matched flag to all transactions
-        const transactionsWithMatchFlag = (result.data.transactions || []).map((tx: Transaction) => ({
-          ...tx,
-          _matched: matchedTxIds.has(tx.id),
-        }));
-        
-        // Get truly unmatched transactions (not linked to any position)
-        const unmatchedTxs = transactionsWithMatchFlag.filter((tx: Transaction) => !tx._matched);
-        
+        // Set basic data for token dict and project dict
         setData({
-          ...result.data,
-          transactions: transactionsWithMatchFlag,
-          unmatchedTransactions: unmatchedTxs,
+          transactions: [],
+          positions: [],
+          openPositions: [],
+          closedPositions: [],
+          unmatchedTransactions: [],
+          tokenDict: groupedResult.data.tokenDict || {},
+          projectDict: groupedResult.data.projectDict || {},
+          summary: {
+            total: groupedResult.data.totalTransactions || 0,
+            totalPositions: 0,
+            openPositions: 0,
+            closedPositions: 0,
+            matchedTransactions: 0,
+            unmatchedTransactions: groupedResult.data.totalTransactions || 0,
+            matchRate: "0%",
+          }
         });
       } else {
-        throw new Error(result.detail?.error || "Failed to fetch data");
+        throw new Error(groupedResult.detail?.error || "Failed to fetch data");
       }
     } catch (err) {
       console.error("Error fetching data:", err);
@@ -499,20 +519,12 @@ export default function BuildPage() {
         ) : (
           /* Three Column Grid */
           <div className="grid grid-cols-3 gap-6 h-[calc(100vh-220px)]">
-            {/* Column 1: Unmatched Transactions */}
+            {/* Column 1: Transaction Groups */}
             <TransactionsColumn
-              transactions={data?.unmatchedTransactions || []}
+              groups={transactionGroups}
               tokenDict={data?.tokenDict || {}}
-              projectDict={data?.projectDict || {}}
               chainNames={chainNames}
-              positions={data?.positions || []}
-              hiddenTxIds={hiddenTxIds}
-              showHidden={showHidden}
               isLoading={loading}
-              onHideTransaction={handleHideTransaction}
-              onUnhideTransaction={handleUnhideTransaction}
-              onAddToPosition={handleAddToPosition}
-              onToggleShowHidden={handleToggleShowHidden}
             />
 
             {/* Column 2: Positions */}
