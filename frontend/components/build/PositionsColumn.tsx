@@ -23,6 +23,8 @@ interface Transaction {
   sends?: Array<{ token_id: string; amount: number }>;
   receives?: Array<{ token_id: string; amount: number }>;
   _category?: string;
+  _totalIn?: number;
+  _totalOut?: number;
 }
 
 interface PositionToken {
@@ -385,11 +387,6 @@ function PositionCard({
   getTypeIcon: (type: string, side?: string) => React.ReactNode;
   getTypeColor: (type: string) => string;
 }) {
-  const getTokenValue = (tokenId: string, amount: number) => {
-    const token = tokenDict[tokenId];
-    return amount * (token?.price || 0);
-  };
-
   return (
     <div 
       className={`border-b border-[#21262D] last:border-b-0 transition-colors ${isDragOver ? 'bg-[#388bfd33] border-[#58A6FF]' : ''}`}
@@ -533,14 +530,10 @@ function PositionCard({
                 </div>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {position.transactions.map((tx) => {
-                    const totalIn = (tx.receives || []).reduce(
-                      (sum, r) => sum + getTokenValue(r.token_id, r.amount),
-                      0
-                    );
-                    const totalOut = (tx.sends || []).reduce(
-                      (sum, s) => sum + getTokenValue(s.token_id, s.amount),
-                      0
-                    );
+                    // Use pre-calculated historical values from backend
+                    // These are calculated with price_usd (historical) not tokenDict.price (current)
+                    const totalIn = tx._totalIn || 0;
+                    const totalOut = tx._totalOut || 0;
 
                     return (
                       <div

@@ -663,21 +663,30 @@ export default function BuildPage() {
 
             {/* Column 2: User Positions */}
             <PositionsColumn
-              positions={userPositions.map(up => ({
-                id: up.id,
-                protocol: up.protocol || "",
-                protocolName: up.protocol || "Custom",
-                chain: up.chain || "",
-                type: up.position_type || "custom",
-                name: up.name,
-                displayName: up.name,
-                valueUsd: 0,
-                status: up.status as "open" | "closed",
-                transactionCount: up.transactionCount,
-                transactions: (up.transactionIds || [])
+              positions={userPositions.map(up => {
+                // Get transactions for this position
+                const txs = (up.transactionIds || [])
                   .map(txId => transactionLookup.get(txId))
-                  .filter((tx): tx is Transaction => tx !== undefined)
-              }))}
+                  .filter((tx): tx is Transaction => tx !== undefined);
+                
+                // Calculate position value from historical transaction values
+                // valueUsd = total cost basis (sum of what was sent out at historical prices)
+                const valueUsd = txs.reduce((sum, tx) => sum + (tx._totalOut || 0), 0);
+                
+                return {
+                  id: up.id,
+                  protocol: up.protocol || "",
+                  protocolName: up.protocol || "Custom",
+                  chain: up.chain || "",
+                  type: up.position_type || "custom",
+                  name: up.name,
+                  displayName: up.name,
+                  valueUsd,
+                  status: up.status as "open" | "closed",
+                  transactionCount: up.transactionCount,
+                  transactions: txs
+                };
+              })}
               tokenDict={data?.tokenDict || {}}
               chainNames={chainNames}
               filter={positionFilter}
@@ -692,18 +701,26 @@ export default function BuildPage() {
             {/* Column 3: Strategies */}
             <StrategiesColumn
               strategies={strategies}
-              positions={userPositions.map(up => ({
-                id: up.id,
-                protocol: up.protocol || "",
-                protocolName: up.protocol || "Custom",
-                chain: up.chain || "",
-                type: up.position_type || "custom",
-                name: up.name,
-                displayName: up.name,
-                valueUsd: 0,
-                status: up.status as "open" | "closed",
-                transactionCount: up.transactionCount,
-              }))}
+              positions={userPositions.map(up => {
+                // Calculate value from transactions
+                const txs = (up.transactionIds || [])
+                  .map(txId => transactionLookup.get(txId))
+                  .filter((tx): tx is Transaction => tx !== undefined);
+                const valueUsd = txs.reduce((sum, tx) => sum + (tx._totalOut || 0), 0);
+                
+                return {
+                  id: up.id,
+                  protocol: up.protocol || "",
+                  protocolName: up.protocol || "Custom",
+                  chain: up.chain || "",
+                  type: up.position_type || "custom",
+                  name: up.name,
+                  displayName: up.name,
+                  valueUsd,
+                  status: up.status as "open" | "closed",
+                  transactionCount: up.transactionCount,
+                };
+              })}
               onCreateStrategy={handleCreateStrategy}
               onDeleteStrategy={handleDeleteStrategy}
               isLoading={loading}
