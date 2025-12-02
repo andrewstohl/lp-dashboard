@@ -336,6 +336,170 @@ def _apply_cached_prices_to_transactions(
     return transactions
 
 
+async def _enrich_transactions_with_historical_prices(
+    transactions: List[Dict],
+    cache,
+    price_service,
+    token_dict: Dict
+) -> None:
+    """
+    Fetch and cache historical prices for all transactions.
+    
+    For each transaction:
+    1. Check if we already have cached prices
+    2. If not, fetch from CoinGecko and cache
+    3. Apply the prices to the transaction tokens
+    
+    This is called once when transactions are loaded. Prices are cached
+    permanently in SQLite, so subsequent loads are instant.
+    """
+    for tx in transactions:
+        tx_id = tx.get("id", tx.get("tx", {}).get("hash", ""))
+        if not tx_id:
+            continue
+        
+        # Check if we already have cached prices for this transaction
+        cached_prices = cache.get_transaction_prices(tx_id)
+        
+        # Filter out _attempted markers to get actual prices
+        actual_prices = {k: v for k, v in cached_prices.items() if k != "_attempted"} if cached_prices else {}
+        
+        # Apply any cached prices we have
+        if actual_prices:
+            _apply_prices_to_transaction(tx, actual_prices, token_dict)
+        
+        # If we already attempted this tx (has _attempted marker), don't retry API calls
+        if cached_prices and "_attempted" in cached_prices:
+            continue
+        
+        # Check if we need to fetch any prices (tokens without cached prices)
+        all_tokens = (tx.get("sends", []) or []) + (tx.get("receives", []) or [])
+        tokens_needing_prices = [
+            t.get("token_id", "").lower() 
+            for t in all_tokens 
+            if t.get("token_id") and t.get("token_id", "").lower() not in actual_prices
+        ]
+        
+        if not tokens_needing_prices:
+            # All tokens already have cached prices
+            continue
+        
+        # Need to fetch historical prices for this transaction
+        chain = tx.get("chain", "eth")
+        timestamp = int(tx.get("time_at", 0))
+        prices_to_save = {}
+        
+        # Process sends
+        for token in tx.get("sends", []) or []:
+            token_addr = token.get("token_id", "")
+            amount = float(token.get("amount", 0))
+            
+            # Skip if already has cached price
+            if token_addr and token_addr.lower() in actual_prices:
+                continue
+            
+            if token_addr and amount > 0:
+                try:
+                    price = await price_service.get_historical_price(token_addr, chain, timestamp)
+                    if price is not None:
+                        prices_to_save[token_addr] = {"price_usd": price}
+                        token["price_usd"] = price
+                        token["value_usd"] = price * amount
+                        token["_price_source"] = "historical"
+                    else:
+                        # Fall back to current price
+                        token_info = token_dict.get(token_addr, {})
+                        price = token_info.get("price", 0) or 0
+                        token["price_usd"] = price
+                        token["value_usd"] = price * amount
+                        token["_price_source"] = "current"
+                except Exception as e:
+                    logger.warning(f"Failed to get historical price for {token_addr}: {e}")
+                    token_info = token_dict.get(token_addr, {})
+                    price = token_info.get("price", 0) or 0
+                    token["price_usd"] = price
+                    token["value_usd"] = price * amount
+                    token["_price_source"] = "current"
+        
+        # Process receives
+        for token in tx.get("receives", []) or []:
+            token_addr = token.get("token_id", "")
+            amount = float(token.get("amount", 0))
+            
+            # Skip if already has cached price
+            if token_addr and token_addr.lower() in actual_prices:
+                continue
+            
+            if token_addr and amount > 0:
+                try:
+                    # Check if we already fetched this token in sends
+                    if token_addr in prices_to_save:
+                        price = prices_to_save[token_addr]["price_usd"]
+                    else:
+                        price = await price_service.get_historical_price(token_addr, chain, timestamp)
+                    
+                    if price is not None:
+                        prices_to_save[token_addr] = {"price_usd": price}
+                        token["price_usd"] = price
+                        token["value_usd"] = price * amount
+                        token["_price_source"] = "historical"
+                    else:
+                        token_info = token_dict.get(token_addr, {})
+                        price = token_info.get("price", 0) or 0
+                        token["price_usd"] = price
+                        token["value_usd"] = price * amount
+                        token["_price_source"] = "current"
+                except Exception as e:
+                    logger.warning(f"Failed to get historical price for {token_addr}: {e}")
+                    token_info = token_dict.get(token_addr, {})
+                    price = token_info.get("price", 0) or 0
+                    token["price_usd"] = price
+                    token["value_usd"] = price * amount
+                    token["_price_source"] = "current"
+        
+        # Cache the prices we successfully fetched
+        if prices_to_save:
+            cache.save_transaction_prices(tx_id, prices_to_save)
+        else:
+            # Mark as attempted so we don't keep retrying
+            cache.save_transaction_prices(tx_id, {"_attempted": {"price_usd": None}})
+
+
+def _apply_prices_to_transaction(tx: Dict, cached_prices: Dict, token_dict: Dict) -> None:
+    """Apply cached prices to a transaction's tokens."""
+    for token in tx.get("sends", []) or []:
+        token_addr = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        
+        if token_addr in cached_prices:
+            price = cached_prices[token_addr].get("price_usd", 0)
+            token["price_usd"] = price
+            token["value_usd"] = price * amount
+            token["_price_source"] = "historical"
+        else:
+            token_info = token_dict.get(token_addr, {})
+            price = token_info.get("price", 0) or 0
+            token["price_usd"] = price
+            token["value_usd"] = price * amount
+            token["_price_source"] = "current"
+    
+    for token in tx.get("receives", []) or []:
+        token_addr = token.get("token_id", "")
+        amount = float(token.get("amount", 0))
+        
+        if token_addr in cached_prices:
+            price = cached_prices[token_addr].get("price_usd", 0)
+            token["price_usd"] = price
+            token["value_usd"] = price * amount
+            token["_price_source"] = "historical"
+        else:
+            token_info = token_dict.get(token_addr, {})
+            price = token_info.get("price", 0) or 0
+            token["price_usd"] = price
+            token["value_usd"] = price * amount
+            token["_price_source"] = "current"
+
+
 def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
     """
     Group transactions by chain > protocol > type > token.
@@ -940,27 +1104,15 @@ async def get_grouped_transactions(
         all_transactions = result["transactions"]
         token_dict = result["token_dict"]
         
-        # Get cache for historical prices
+        # Get cache and price service
         cache = get_cache(wallet)
-        
-        # Apply cached historical prices to transactions (if available)
-        # This adds price_usd and value_usd to each token, preferring historical over current
-        all_transactions = _apply_cached_prices_to_transactions(
-            all_transactions, cache, token_dict
-        )
-        
-        # Enrich token_dict with current prices for any missing tokens
         price_service = get_price_service()
-        missing_tokens = []
-        for tx in all_transactions:
-            for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
-                token_id = token.get("token_id", "")
-                if token_id and token_id not in token_dict:
-                    missing_tokens.append(token_id)
         
-        if missing_tokens:
-            token_dict = await price_service.enrich_token_dict(token_dict, list(set(missing_tokens)))
-            logger.info(f"Enriched {len(missing_tokens)} missing token prices for grouped transactions")
+        # Fetch and cache historical prices for ALL transactions that don't have them
+        # This is done once per transaction, then cached forever
+        await _enrich_transactions_with_historical_prices(
+            all_transactions, cache, price_service, token_dict
+        )
         
         # Apply MVT filtering with overhead filter
         filtered_transactions, hidden_counts = _filter_transactions(
@@ -1002,21 +1154,6 @@ async def get_grouped_transactions(
         except Exception as e:
             logger.warning(f"Could not fetch open positions: {e}")
         
-        # Count transactions with/without historical prices
-        txs_with_historical = 0
-        txs_without_historical = 0
-        for group in groups:
-            for tx in group.get("transactions", []):
-                has_historical = False
-                for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
-                    if token.get("_price_source") == "historical":
-                        has_historical = True
-                        break
-                if has_historical:
-                    txs_with_historical += 1
-                else:
-                    txs_without_historical += 1
-        
         return {
             "status": "success",
             "data": {
@@ -1027,11 +1164,6 @@ async def get_grouped_transactions(
                 "tokenDict": token_dict,
                 "projectDict": project_dict,
                 "hiddenCounts": hidden_counts,
-                "priceInfo": {
-                    "historicalPrices": txs_with_historical,
-                    "currentPrices": txs_without_historical,
-                    "needsEnrichment": txs_without_historical > 0
-                },
                 "filters": {
                     "since": since_dt.isoformat(),
                     "until": until_dt.isoformat(),

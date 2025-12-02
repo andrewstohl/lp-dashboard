@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Wallet, RefreshCw, Loader2, AlertCircle, Clock, DollarSign } from "lucide-react";
+import { Wallet, RefreshCw, Loader2, AlertCircle } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionsColumn } from "@/components/build/TransactionsColumn";
 import { PositionsColumn } from "@/components/build/PositionsColumn";
@@ -168,14 +168,6 @@ export default function BuildPage() {
   const [showCreatePosition, setShowCreatePosition] = useState(false);
   const [assignedTxIds, setAssignedTxIds] = useState<Set<string>>(new Set());
   
-  // Price enrichment state
-  const [priceInfo, setPriceInfo] = useState<{
-    historicalPrices: number;
-    currentPrices: number;
-    needsEnrichment: boolean;
-  } | null>(null);
-  const [enrichingPrices, setEnrichingPrices] = useState(false);
-
   // Load cached wallet and hidden transactions on mount
   useEffect(() => {
     const cached = localStorage.getItem("vora_wallet_address");
@@ -217,11 +209,6 @@ export default function BuildPage() {
       
       if (groupedResult.status === "success") {
         setTransactionGroups(groupedResult.data.groups || []);
-        
-        // Capture price info
-        if (groupedResult.data.priceInfo) {
-          setPriceInfo(groupedResult.data.priceInfo);
-        }
         
         // Set basic data for token dict and project dict
         setData({
@@ -521,34 +508,6 @@ export default function BuildPage() {
     }
   };
 
-  // Enrich historical prices
-  const handleEnrichPrices = async () => {
-    if (!walletAddress || enrichingPrices) return;
-    
-    setEnrichingPrices(true);
-    try {
-      // Enrich in batches of 10
-      const response = await fetch(
-        `${API_URL}/api/v1/build/enrich-prices?wallet=${walletAddress}&max_transactions=10`,
-        { method: "POST" }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to enrich prices: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      console.log("Price enrichment result:", result);
-      
-      // Refresh data to get updated prices
-      await fetchData(walletAddress);
-    } catch (err) {
-      console.error("Error enriching prices:", err);
-    } finally {
-      setEnrichingPrices(false);
-    }
-  };
-
   const handleDeleteStrategy = async (strategyId: string) => {
     try {
       const response = await fetch(
@@ -625,61 +584,26 @@ export default function BuildPage() {
       {data && !loading && (
         <div className="border-b border-[#30363D] bg-[#161B22]/50">
           <div className="max-w-[1800px] mx-auto px-6 py-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-6 text-sm">
-                <span className="text-[#8B949E]">
-                  <span className="text-[#E6EDF3] font-medium">{transactionGroups.length}</span> groups
-                </span>
-                <span className="text-[#8B949E]">
-                  <span className="text-[#E6EDF3] font-medium">
-                    {transactionGroups.reduce((sum, g) => sum + g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length, 0)}
-                  </span> unassigned txs
-                </span>
-                <span className="text-[#30363D]">|</span>
-                <span className="text-[#8B949E]">
-                  <span className="text-[#3FB950] font-medium">{userPositions.length}</span> positions
-                </span>
-                <span className="text-[#8B949E]">
-                  <span className="text-[#58A6FF] font-medium">{assignedTxIds.size}</span> assigned txs
-                </span>
-                <span className="text-[#30363D]">|</span>
-                <span className="text-[#8B949E]">
-                  <span className="text-[#A371F7] font-medium">{strategies.length}</span> strategies
-                </span>
-              </div>
-              
-              {/* Price Info */}
-              {priceInfo && (
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="flex items-center gap-2 text-[#8B949E]">
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>
-                      <span className="text-[#3FB950] font-medium">{priceInfo.historicalPrices}</span> historical
-                    </span>
-                    <span>/</span>
-                    <span>
-                      <span className={priceInfo.currentPrices > 0 ? "text-[#F0883E] font-medium" : "text-[#8B949E]"}>
-                        {priceInfo.currentPrices}
-                      </span> current
-                    </span>
-                  </div>
-                  {priceInfo.needsEnrichment && (
-                    <button
-                      onClick={handleEnrichPrices}
-                      disabled={enrichingPrices}
-                      className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white rounded font-medium transition-colors"
-                      title="Fetch historical prices from CoinGecko (10 at a time)"
-                    >
-                      {enrichingPrices ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <DollarSign className="w-3 h-3" />
-                      )}
-                      {enrichingPrices ? "Fetching..." : "Fetch Prices"}
-                    </button>
-                  )}
-                </div>
-              )}
+            <div className="flex items-center gap-6 text-sm">
+              <span className="text-[#8B949E]">
+                <span className="text-[#E6EDF3] font-medium">{transactionGroups.length}</span> groups
+              </span>
+              <span className="text-[#8B949E]">
+                <span className="text-[#E6EDF3] font-medium">
+                  {transactionGroups.reduce((sum, g) => sum + g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length, 0)}
+                </span> unassigned txs
+              </span>
+              <span className="text-[#30363D]">|</span>
+              <span className="text-[#8B949E]">
+                <span className="text-[#3FB950] font-medium">{userPositions.length}</span> positions
+              </span>
+              <span className="text-[#8B949E]">
+                <span className="text-[#58A6FF] font-medium">{assignedTxIds.size}</span> assigned txs
+              </span>
+              <span className="text-[#30363D]">|</span>
+              <span className="text-[#8B949E]">
+                <span className="text-[#A371F7] font-medium">{strategies.length}</span> strategies
+              </span>
             </div>
           </div>
         </div>
