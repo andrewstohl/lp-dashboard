@@ -274,68 +274,6 @@ def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
     }
 
 
-def _apply_cached_prices_to_transactions(
-    transactions: List[Dict],
-    cache,
-    token_dict: Dict
-) -> List[Dict]:
-    """
-    Apply cached historical prices to transactions.
-    
-    For each transaction:
-    1. Check if we have cached historical prices
-    2. If yes, use those instead of token_dict current prices
-    3. If no, fall back to token_dict (current prices)
-    
-    This modifies the token amounts in-place by adding price_usd and value_usd.
-    """
-    for tx in transactions:
-        tx_id = tx.get("id", tx.get("tx", {}).get("hash", ""))
-        if not tx_id:
-            continue
-            
-        # Get cached historical prices for this transaction
-        cached_prices = cache.get_transaction_prices(tx_id)
-        
-        # Apply prices to sends
-        for token in tx.get("sends", []) or []:
-            token_id = token.get("token_id", "")
-            amount = float(token.get("amount", 0))
-            
-            if token_id in cached_prices:
-                # Use cached historical price
-                token["price_usd"] = cached_prices[token_id].get("price_usd", 0)
-                token["value_usd"] = cached_prices[token_id].get("price_usd", 0) * amount
-                token["_price_source"] = "historical"
-            else:
-                # Fall back to current price from token_dict
-                token_info = token_dict.get(token_id, {})
-                price = token_info.get("price", 0) or 0
-                token["price_usd"] = price
-                token["value_usd"] = price * amount
-                token["_price_source"] = "current"
-        
-        # Apply prices to receives
-        for token in tx.get("receives", []) or []:
-            token_id = token.get("token_id", "")
-            amount = float(token.get("amount", 0))
-            
-            if token_id in cached_prices:
-                # Use cached historical price
-                token["price_usd"] = cached_prices[token_id].get("price_usd", 0)
-                token["value_usd"] = cached_prices[token_id].get("price_usd", 0) * amount
-                token["_price_source"] = "historical"
-            else:
-                # Fall back to current price from token_dict
-                token_info = token_dict.get(token_id, {})
-                price = token_info.get("price", 0) or 0
-                token["price_usd"] = price
-                token["value_usd"] = price * amount
-                token["_price_source"] = "current"
-    
-    return transactions
-
-
 async def _enrich_transactions_with_historical_prices(
     transactions: List[Dict],
     cache,
@@ -361,8 +299,8 @@ async def _enrich_transactions_with_historical_prices(
         # Check if we already have cached prices for this transaction
         cached_prices = cache.get_transaction_prices(tx_id)
         
-        # Filter out _attempted markers to get actual prices
-        actual_prices = {k: v for k, v in cached_prices.items() if k != "_attempted"} if cached_prices else {}
+        # Filter out _attempted markers and lowercase keys for consistent lookups
+        actual_prices = {k.lower(): v for k, v in cached_prices.items() if k != "_attempted"} if cached_prices else {}
         
         # Apply any cached prices we have
         if actual_prices:
@@ -392,30 +330,34 @@ async def _enrich_transactions_with_historical_prices(
         # Process sends
         for token in tx.get("sends", []) or []:
             token_addr = token.get("token_id", "")
+            token_addr_lower = token_addr.lower() if token_addr else ""
             amount = float(token.get("amount", 0))
             
+            # Add symbol from token_dict
+            token_info = token_dict.get(token_addr, {})
+            if not token.get("symbol"):
+                token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+            
             # Skip if already has cached price
-            if token_addr and token_addr.lower() in actual_prices:
+            if token_addr_lower and token_addr_lower in actual_prices:
                 continue
             
             if token_addr and amount > 0:
                 try:
                     price = await price_service.get_historical_price(token_addr, chain, timestamp)
                     if price is not None:
-                        prices_to_save[token_addr] = {"price_usd": price}
+                        prices_to_save[token_addr_lower] = {"price_usd": price}
                         token["price_usd"] = price
                         token["value_usd"] = price * amount
                         token["_price_source"] = "historical"
                     else:
                         # Fall back to current price
-                        token_info = token_dict.get(token_addr, {})
                         price = token_info.get("price", 0) or 0
                         token["price_usd"] = price
                         token["value_usd"] = price * amount
                         token["_price_source"] = "current"
                 except Exception as e:
                     logger.warning(f"Failed to get historical price for {token_addr}: {e}")
-                    token_info = token_dict.get(token_addr, {})
                     price = token_info.get("price", 0) or 0
                     token["price_usd"] = price
                     token["value_usd"] = price * amount
@@ -424,34 +366,38 @@ async def _enrich_transactions_with_historical_prices(
         # Process receives
         for token in tx.get("receives", []) or []:
             token_addr = token.get("token_id", "")
+            token_addr_lower = token_addr.lower() if token_addr else ""
             amount = float(token.get("amount", 0))
             
+            # Add symbol from token_dict
+            token_info = token_dict.get(token_addr, {})
+            if not token.get("symbol"):
+                token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+            
             # Skip if already has cached price
-            if token_addr and token_addr.lower() in actual_prices:
+            if token_addr_lower and token_addr_lower in actual_prices:
                 continue
             
             if token_addr and amount > 0:
                 try:
                     # Check if we already fetched this token in sends
-                    if token_addr in prices_to_save:
-                        price = prices_to_save[token_addr]["price_usd"]
+                    if token_addr_lower in prices_to_save:
+                        price = prices_to_save[token_addr_lower]["price_usd"]
                     else:
                         price = await price_service.get_historical_price(token_addr, chain, timestamp)
                     
                     if price is not None:
-                        prices_to_save[token_addr] = {"price_usd": price}
+                        prices_to_save[token_addr_lower] = {"price_usd": price}
                         token["price_usd"] = price
                         token["value_usd"] = price * amount
                         token["_price_source"] = "historical"
                     else:
-                        token_info = token_dict.get(token_addr, {})
                         price = token_info.get("price", 0) or 0
                         token["price_usd"] = price
                         token["value_usd"] = price * amount
                         token["_price_source"] = "current"
                 except Exception as e:
                     logger.warning(f"Failed to get historical price for {token_addr}: {e}")
-                    token_info = token_dict.get(token_addr, {})
                     price = token_info.get("price", 0) or 0
                     token["price_usd"] = price
                     token["value_usd"] = price * amount
@@ -461,23 +407,37 @@ async def _enrich_transactions_with_historical_prices(
         if prices_to_save:
             cache.save_transaction_prices(tx_id, prices_to_save)
         else:
-            # Mark as attempted so we don't keep retrying
+            # Mark as attempted so we don't keep retrying failed lookups.
+            # Uses "_attempted" as a sentinel key in the prices table.
+            # This prevents infinite retry loops for tokens CoinGecko doesn't have.
             cache.save_transaction_prices(tx_id, {"_attempted": {"price_usd": None}})
 
 
 def _apply_prices_to_transaction(tx: Dict, cached_prices: Dict, token_dict: Dict) -> None:
-    """Apply cached prices to a transaction's tokens."""
+    """Apply cached prices to a transaction's tokens.
+    
+    Also adds symbol from token_dict for display purposes.
+    Note: cached_prices keys are lowercased, so we must lowercase token_addr for lookups.
+    """
+    # Create lowercased lookup for cached_prices
+    cached_prices_lower = {k.lower(): v for k, v in cached_prices.items()}
+    
     for token in tx.get("sends", []) or []:
         token_addr = token.get("token_id", "")
+        token_addr_lower = token_addr.lower()
         amount = float(token.get("amount", 0))
         
-        if token_addr in cached_prices:
-            price = cached_prices[token_addr].get("price_usd", 0)
+        # Add symbol from token_dict
+        token_info = token_dict.get(token_addr, {})
+        if not token.get("symbol"):
+            token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        
+        if token_addr_lower in cached_prices_lower:
+            price = cached_prices_lower[token_addr_lower].get("price_usd", 0)
             token["price_usd"] = price
             token["value_usd"] = price * amount
             token["_price_source"] = "historical"
         else:
-            token_info = token_dict.get(token_addr, {})
             price = token_info.get("price", 0) or 0
             token["price_usd"] = price
             token["value_usd"] = price * amount
@@ -485,15 +445,20 @@ def _apply_prices_to_transaction(tx: Dict, cached_prices: Dict, token_dict: Dict
     
     for token in tx.get("receives", []) or []:
         token_addr = token.get("token_id", "")
+        token_addr_lower = token_addr.lower()
         amount = float(token.get("amount", 0))
         
-        if token_addr in cached_prices:
-            price = cached_prices[token_addr].get("price_usd", 0)
+        # Add symbol from token_dict
+        token_info = token_dict.get(token_addr, {})
+        if not token.get("symbol"):
+            token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        
+        if token_addr_lower in cached_prices_lower:
+            price = cached_prices_lower[token_addr_lower].get("price_usd", 0)
             token["price_usd"] = price
             token["value_usd"] = price * amount
             token["_price_source"] = "historical"
         else:
-            token_info = token_dict.get(token_addr, {})
             price = token_info.get("price", 0) or 0
             token["price_usd"] = price
             token["value_usd"] = price * amount
@@ -1184,138 +1149,22 @@ async def get_grouped_transactions(
 @router.post("/enrich-prices")
 async def enrich_transaction_prices(
     wallet: str = Query(..., description="Wallet address"),
-    tx_ids: Optional[List[str]] = Query(
-        None,
-        description="Specific transaction IDs to enrich (default: all without prices)"
-    ),
-    max_transactions: int = Query(
-        10,
-        ge=1,
-        le=50,
-        description="Max transactions to enrich per request (rate limit protection)"
-    )
+    tx_ids: Optional[List[str]] = Query(None),
+    max_transactions: int = Query(10)
 ) -> Dict[str, Any]:
     """
-    Enrich transactions with historical USD prices from CoinGecko.
+    DEPRECATED: Historical prices are now fetched automatically when transactions are loaded.
     
-    This is called on-demand to avoid rate limiting. Prices are cached
-    permanently in SQLite so subsequent loads are instant.
-    
-    Returns:
-    - enriched: Number of transactions successfully enriched
-    - failed: Number of transactions that failed (token not found, etc.)
-    - remaining: Number of transactions still needing prices
+    This endpoint is no longer needed and will be removed in a future version.
     """
-    try:
-        cache = get_cache(wallet)
-        price_service = get_price_service()
-        
-        # Get transactions needing prices
-        if tx_ids:
-            # Specific transactions requested
-            needs_prices = tx_ids[:max_transactions]
-        else:
-            # Get all transactions without prices
-            all_needing = cache.get_transactions_needing_prices()
-            needs_prices = all_needing[:max_transactions]
-        
-        if not needs_prices:
-            return {
-                "status": "success",
-                "data": {
-                    "enriched": 0,
-                    "failed": 0,
-                    "remaining": 0,
-                    "message": "All transactions already have prices"
-                }
-            }
-        
-        # Load transactions to enrich
-        all_transactions = cache.load_transactions()
-        tx_map = {
-            tx.get("id", tx.get("tx", {}).get("hash", "")): tx 
-            for tx in all_transactions
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "This endpoint is deprecated",
+            "message": "Historical prices are now fetched automatically when transactions load. No manual enrichment needed.",
+            "alternative": "GET /api/v1/build/transactions/grouped - prices are included automatically"
         }
-        
-        enriched = 0
-        failed = 0
-        
-        for tx_id in needs_prices:
-            tx = tx_map.get(tx_id)
-            if not tx:
-                failed += 1
-                continue
-            
-            chain = tx.get("chain", "eth")
-            timestamp = int(tx.get("time_at", 0))
-            prices_to_save = {}
-            
-            # Process sends
-            for token in tx.get("sends", []) or []:
-                token_addr = token.get("token_id", "")
-                amount = float(token.get("amount", 0))
-                
-                if token_addr and amount > 0:
-                    try:
-                        price = await price_service.get_historical_price(
-                            token_addr, chain, timestamp
-                        )
-                        if price is not None:
-                            prices_to_save[token_addr] = {
-                                "price_usd": price,
-                                "value_usd": price * amount
-                            }
-                    except Exception as e:
-                        logger.warning(f"Failed to get price for {token_addr}: {e}")
-
-            
-            # Process receives
-            for token in tx.get("receives", []) or []:
-                token_addr = token.get("token_id", "")
-                amount = float(token.get("amount", 0))
-                
-                if token_addr and amount > 0:
-                    try:
-                        price = await price_service.get_historical_price(
-                            token_addr, chain, timestamp
-                        )
-                        if price is not None:
-                            prices_to_save[token_addr] = {
-                                "price_usd": price,
-                                "value_usd": price * amount
-                            }
-                    except Exception as e:
-                        logger.warning(f"Failed to get price for {token_addr}: {e}")
-            
-            # Save prices to cache
-            if prices_to_save:
-                cache.save_transaction_prices(tx_id, prices_to_save)
-                enriched += 1
-            else:
-                # Mark as attempted even if no prices found
-                # (prevents re-attempting on every request)
-                cache.save_transaction_prices(tx_id, {"_attempted": {"price_usd": None, "value_usd": None}})
-                failed += 1
-        
-        # Count remaining
-        remaining = len(cache.get_transactions_needing_prices())
-        
-        return {
-            "status": "success",
-            "data": {
-                "enriched": enriched,
-                "failed": failed,
-                "remaining": remaining,
-                "processed": len(needs_prices)
-            }
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error enriching prices for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to enrich prices", "message": str(e)}
-        )
+    )
 
 
 @router.get("/cache-stats")
