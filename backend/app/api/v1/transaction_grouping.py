@@ -26,13 +26,19 @@ def infer_flow_direction(tx: Dict, token_dict: Dict) -> Tuple[str, float, float,
     for s in sends:
         token_id = s.get("token_id", "")
         amount = float(s.get("amount", 0))
-        price = token_dict.get(token_id, {}).get("price", 0) or 0
+        # Use enriched price_usd if available (historical), otherwise fall back to token_dict
+        price = s.get("price_usd")
+        if price is None:
+            price = token_dict.get(token_id, {}).get("price", 0) or 0
         total_out += amount * price
     
     for r in receives:
         token_id = r.get("token_id", "")
         amount = float(r.get("amount", 0))
-        price = token_dict.get(token_id, {}).get("price", 0) or 0
+        # Use enriched price_usd if available (historical), otherwise fall back to token_dict
+        price = r.get("price_usd")
+        if price is None:
+            price = token_dict.get(token_id, {}).get("price", 0) or 0
         total_in += amount * price
     
     net_value = total_in - total_out
