@@ -1924,3 +1924,234 @@ async def delete_strategy(
             status_code=500,
             detail={"error": "Failed to delete strategy", "message": str(e)}
         )
+
+
+# ==================== User Position Endpoints ====================
+
+@router.get("/user-positions")
+async def get_user_positions(
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Get all user-created positions for a wallet."""
+    try:
+        cache = get_cache(wallet)
+        positions = cache.get_all_user_positions()
+        
+        return {
+            "status": "success",
+            "data": {
+                "positions": positions,
+                "count": len(positions)
+            }
+        }
+    except Exception as e:
+        logger.exception(f"Error getting user positions for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get positions", "message": str(e)}
+        )
+
+
+@router.post("/user-positions")
+async def create_user_position(
+    wallet: str = Query(..., description="Wallet address"),
+    name: str = Query(..., description="Position name"),
+    description: str = Query("", description="Position description"),
+    chain: str = Query("", description="Chain"),
+    protocol: str = Query("", description="Protocol"),
+    position_type: str = Query("", description="Position type (lp, perpetual, yield)")
+) -> Dict[str, Any]:
+    """Create a new user-defined position."""
+    try:
+        cache = get_cache(wallet)
+        position = cache.create_user_position(
+            name=name,
+            description=description,
+            chain=chain,
+            protocol=protocol,
+            position_type=position_type
+        )
+        
+        return {
+            "status": "success",
+            "data": {"position": position}
+        }
+    except Exception as e:
+        logger.exception(f"Error creating position for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to create position", "message": str(e)}
+        )
+
+
+@router.get("/user-positions/{position_id}")
+async def get_user_position(
+    position_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Get a single user position."""
+    try:
+        cache = get_cache(wallet)
+        position = cache.get_user_position(position_id)
+        
+        if not position:
+            raise HTTPException(status_code=404, detail="Position not found")
+        
+        return {
+            "status": "success",
+            "data": {"position": position}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting position {position_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get position", "message": str(e)}
+        )
+
+
+@router.put("/user-positions/{position_id}")
+async def update_user_position(
+    position_id: str,
+    wallet: str = Query(..., description="Wallet address"),
+    name: str = Query(None, description="New position name"),
+    description: str = Query(None, description="New description"),
+    status: str = Query(None, description="New status (open/closed)")
+) -> Dict[str, Any]:
+    """Update a user position."""
+    try:
+        cache = get_cache(wallet)
+        position = cache.update_user_position(
+            position_id=position_id,
+            name=name,
+            description=description,
+            status=status
+        )
+        
+        if not position:
+            raise HTTPException(status_code=404, detail="Position not found")
+        
+        return {
+            "status": "success",
+            "data": {"position": position}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error updating position {position_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to update position", "message": str(e)}
+        )
+
+
+@router.delete("/user-positions/{position_id}")
+async def delete_user_position(
+    position_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Delete a user position."""
+    try:
+        cache = get_cache(wallet)
+        deleted = cache.delete_user_position(position_id)
+        
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Position not found")
+        
+        return {
+            "status": "success",
+            "data": {"deleted": True, "id": position_id}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error deleting position {position_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to delete position", "message": str(e)}
+        )
+
+
+@router.post("/user-positions/{position_id}/transactions/{transaction_id}")
+async def add_transaction_to_position(
+    position_id: str,
+    transaction_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Add a transaction to a position."""
+    try:
+        cache = get_cache(wallet)
+        success = cache.add_transaction_to_position(position_id, transaction_id)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Failed to add transaction")
+        
+        position = cache.get_user_position(position_id)
+        
+        return {
+            "status": "success",
+            "data": {"position": position}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error adding transaction {transaction_id} to position {position_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to add transaction", "message": str(e)}
+        )
+
+
+@router.delete("/user-positions/{position_id}/transactions/{transaction_id}")
+async def remove_transaction_from_position(
+    position_id: str,
+    transaction_id: str,
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Remove a transaction from a position."""
+    try:
+        cache = get_cache(wallet)
+        success = cache.remove_transaction_from_position(position_id, transaction_id)
+        
+        if not success:
+            raise HTTPException(status_code=400, detail="Transaction not in position")
+        
+        position = cache.get_user_position(position_id)
+        
+        return {
+            "status": "success",
+            "data": {"position": position}
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error removing transaction {transaction_id} from position {position_id}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to remove transaction", "message": str(e)}
+        )
+
+
+@router.get("/assigned-transactions")
+async def get_assigned_transactions(
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """Get all transaction IDs that are assigned to positions."""
+    try:
+        cache = get_cache(wallet)
+        assigned_ids = cache.get_assigned_transaction_ids()
+        
+        return {
+            "status": "success",
+            "data": {
+                "assignedTransactionIds": list(assigned_ids),
+                "count": len(assigned_ids)
+            }
+        }
+    except Exception as e:
+        logger.exception(f"Error getting assigned transactions for {wallet}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to get assigned transactions", "message": str(e)}
+        )

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Circle, MoreHorizontal, X, Edit2, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, TrendingUp, TrendingDown, Circle, MoreHorizontal, X, Edit2, ExternalLink, Plus } from "lucide-react";
 
 interface TokenInfo {
   symbol?: string;
@@ -63,6 +63,8 @@ interface PositionsColumnProps {
   onFilterChange?: (filter: "all" | "open" | "closed") => void;
   onRemoveTransaction?: (positionId: string, txId: string) => void;
   onRenamePosition?: (positionId: string, newName: string) => void;
+  onCreatePosition?: () => void;
+  onDropTransaction?: (positionId: string, transactionId: string) => void;
   isLoading?: boolean;
 }
 
@@ -74,6 +76,8 @@ export function PositionsColumn({
   onFilterChange,
   onRemoveTransaction,
   onRenamePosition,
+  onCreatePosition,
+  onDropTransaction,
   isLoading = false,
 }: PositionsColumnProps) {
   const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set());
@@ -200,6 +204,15 @@ export function PositionsColumn({
               {positions.length} position{positions.length !== 1 ? "s" : ""} · ${totalValue.toLocaleString(undefined, { maximumFractionDigits: 0 })}
             </p>
           </div>
+          {onCreatePosition && (
+            <button
+              onClick={onCreatePosition}
+              className="flex items-center gap-1 px-2 py-1 bg-[#238636] hover:bg-[#2EA043] text-white text-xs font-medium rounded transition-colors"
+            >
+              <Plus className="w-3 h-3" />
+              New
+            </button>
+          )}
         </div>
         {onFilterChange && (
           <div className="flex gap-2 mt-2">

@@ -7,6 +7,7 @@ import { TransactionsColumn } from "@/components/build/TransactionsColumn";
 import { PositionsColumn } from "@/components/build/PositionsColumn";
 import { StrategiesColumn } from "@/components/build/StrategiesColumn";
 import { CreateStrategyModal } from "@/components/build/CreateStrategyModal";
+import { CreatePositionModal } from "@/components/build/CreatePositionModal";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8004";
 
@@ -98,6 +99,20 @@ interface Strategy {
   createdAt: number;
 }
 
+interface UserPosition {
+  id: string;
+  name: string;
+  description?: string;
+  chain?: string;
+  protocol?: string;
+  position_type?: string;
+  status: string;
+  transactionIds: string[];
+  transactionCount: number;
+  created_at: string;
+  updated_at: string;
+}
+
 interface BuildData {
   transactions: Transaction[];
   positions: Position[];
@@ -147,6 +162,11 @@ export default function BuildPage() {
   // Strategies (from API)
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [showCreateStrategy, setShowCreateStrategy] = useState(false);
+
+  // User-created positions (from API)
+  const [userPositions, setUserPositions] = useState<UserPosition[]>([]);
+  const [showCreatePosition, setShowCreatePosition] = useState(false);
+  const [assignedTxIds, setAssignedTxIds] = useState<Set<string>>(new Set());
 
   // Load cached wallet and hidden transactions on mount
   useEffect(() => {
@@ -379,6 +399,104 @@ export default function BuildPage() {
     }
   }, [walletAddress, fetchStrategies]);
 
+  // Fetch user positions from API
+  const fetchUserPositions = useCallback(async (address: string) => {
+    if (!address) return;
+    
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/build/user-positions?wallet=${address}`
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch positions: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      
+      if (result.status === "success") {
+        setUserPositions(result.data.positions || []);
+        
+        // Collect all assigned transaction IDs
+        const assigned = new Set<string>();
+        (result.data.positions || []).forEach((pos: UserPosition) => {
+          (pos.transactionIds || []).forEach((txId: string) => assigned.add(txId));
+        });
+        setAssignedTxIds(assigned);
+      }
+    } catch (err) {
+      console.error("Error fetching user positions:", err);
+    }
+  }, []);
+
+  // Load user positions when wallet changes
+  useEffect(() => {
+    if (walletAddress) {
+      fetchUserPositions(walletAddress);
+    }
+  }, [walletAddress, fetchUserPositions]);
+
+  // Create user position
+  const handleCreatePosition = async (posData: { name: string; description: string }) => {
+    try {
+      const params = new URLSearchParams({
+        wallet: walletAddress,
+        name: posData.name,
+        description: posData.description,
+      });
+      
+      const response = await fetch(
+        `${API_URL}/api/v1/build/user-positions?${params}`,
+        { method: "POST" }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to create position: ${response.status}`);
+      }
+      
+      await fetchUserPositions(walletAddress);
+    } catch (err) {
+      console.error("Error creating position:", err);
+      setError(err instanceof Error ? err.message : "Failed to create position");
+    }
+  };
+
+  // Add transaction to position
+  const handleAddTransactionToPosition = async (positionId: string, transactionId: string) => {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/build/user-positions/${positionId}/transactions/${transactionId}?wallet=${walletAddress}`,
+        { method: "POST" }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to add transaction: ${response.status}`);
+      }
+      
+      await fetchUserPositions(walletAddress);
+    } catch (err) {
+      console.error("Error adding transaction:", err);
+    }
+  };
+
+  // Remove transaction from position
+  const handleRemoveTransactionFromPosition = async (positionId: string, transactionId: string) => {
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/build/user-positions/${positionId}/transactions/${transactionId}?wallet=${walletAddress}`,
+        { method: "DELETE" }
+      );
+      
+      if (!response.ok) {
+        throw new Error(`Failed to remove transaction: ${response.status}`);
+      }
+      
+      await fetchUserPositions(walletAddress);
+    } catch (err) {
+      console.error("Error removing transaction:", err);
+    }
+  };
+
   const handleDeleteStrategy = async (strategyId: string) => {
     try {
       const response = await fetch(
@@ -521,28 +639,57 @@ export default function BuildPage() {
           <div className="grid grid-cols-3 gap-6 h-[calc(100vh-220px)]">
             {/* Column 1: Transaction Groups */}
             <TransactionsColumn
-              groups={transactionGroups}
+              groups={transactionGroups.map(g => ({
+                ...g,
+                transactions: g.transactions.filter(tx => !assignedTxIds.has(tx.id)),
+                transactionCount: g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length
+              })).filter(g => g.transactionCount > 0)}
               tokenDict={data?.tokenDict || {}}
               chainNames={chainNames}
               isLoading={loading}
+              onDragStart={(txId, groupKey) => console.log('Drag started:', txId)}
             />
 
-            {/* Column 2: Positions */}
+            {/* Column 2: User Positions */}
             <PositionsColumn
-              positions={data?.positions || []}
+              positions={userPositions.map(up => ({
+                id: up.id,
+                protocol: up.protocol || "",
+                protocolName: up.protocol || "Custom",
+                chain: up.chain || "",
+                type: up.position_type || "custom",
+                name: up.name,
+                displayName: up.name,
+                valueUsd: 0,
+                status: up.status as "open" | "closed",
+                transactionCount: up.transactionCount,
+                transactions: []
+              }))}
               tokenDict={data?.tokenDict || {}}
               chainNames={chainNames}
               filter={positionFilter}
               onFilterChange={setPositionFilter}
-              onRemoveTransaction={handleRemoveFromPosition}
+              onRemoveTransaction={handleRemoveTransactionFromPosition}
               onRenamePosition={handleRenamePosition}
+              onCreatePosition={() => setShowCreatePosition(true)}
               isLoading={loading}
             />
 
             {/* Column 3: Strategies */}
             <StrategiesColumn
               strategies={strategies}
-              positions={data?.positions || []}
+              positions={userPositions.map(up => ({
+                id: up.id,
+                protocol: up.protocol || "",
+                protocolName: up.protocol || "Custom",
+                chain: up.chain || "",
+                type: up.position_type || "custom",
+                name: up.name,
+                displayName: up.name,
+                valueUsd: 0,
+                status: up.status as "open" | "closed",
+                transactionCount: up.transactionCount,
+              }))}
               onCreateStrategy={handleCreateStrategy}
               onDeleteStrategy={handleDeleteStrategy}
               isLoading={loading}
@@ -557,6 +704,13 @@ export default function BuildPage() {
         onClose={() => setShowCreateStrategy(false)}
         onSubmit={handleStrategySubmit}
         availablePositions={data?.positions || []}
+      />
+
+      {/* Create Position Modal */}
+      <CreatePositionModal
+        isOpen={showCreatePosition}
+        onClose={() => setShowCreatePosition(false)}
+        onSubmit={handleCreatePosition}
       />
     </div>
   );

@@ -119,6 +119,38 @@ class TransactionCache:
                 )
             """)
             
+            # User-created positions
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_positions (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    chain TEXT,
+                    protocol TEXT,
+                    position_type TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Position-Transaction links
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS position_transactions (
+                    position_id TEXT NOT NULL,
+                    transaction_id TEXT NOT NULL,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (position_id, transaction_id),
+                    FOREIGN KEY (position_id) REFERENCES user_positions(id)
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pt_position ON position_transactions(position_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_pt_transaction ON position_transactions(transaction_id)
+            """)
+            
             conn.commit()
 
     def get_latest_timestamp(self) -> Optional[int]:
@@ -504,6 +536,159 @@ class TransactionCache:
             cursor = conn.execute("DELETE FROM strategies WHERE id = ?", (strategy_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    # ==================== User Position CRUD ====================
+    
+    def create_user_position(
+        self,
+        name: str,
+        description: str = "",
+        chain: str = "",
+        protocol: str = "",
+        position_type: str = ""
+    ) -> Dict[str, Any]:
+        """Create a new user-defined position"""
+        import uuid
+        position_id = str(uuid.uuid4())
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                INSERT INTO user_positions (id, name, description, chain, protocol, position_type)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (position_id, name, description, chain, protocol, position_type))
+            conn.commit()
+        
+        return self.get_user_position(position_id)
+    
+    def get_user_position(self, position_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single user position with its transactions"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            row = conn.execute(
+                "SELECT * FROM user_positions WHERE id = ?",
+                (position_id,)
+            ).fetchone()
+            
+            if not row:
+                return None
+            
+            position = dict(row)
+            
+            # Get linked transaction IDs
+            tx_rows = conn.execute("""
+                SELECT transaction_id, added_at
+                FROM position_transactions
+                WHERE position_id = ?
+                ORDER BY added_at DESC
+            """, (position_id,)).fetchall()
+            
+            position["transactionIds"] = [r["transaction_id"] for r in tx_rows]
+            position["transactionCount"] = len(tx_rows)
+            
+            return position
+    
+    def get_all_user_positions(self) -> List[Dict[str, Any]]:
+        """Get all user-created positions"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            rows = conn.execute("""
+                SELECT * FROM user_positions
+                ORDER BY updated_at DESC
+            """).fetchall()
+            
+            positions = []
+            for row in rows:
+                position = dict(row)
+                
+                # Get transaction count
+                tx_count = conn.execute("""
+                    SELECT COUNT(*) FROM position_transactions
+                    WHERE position_id = ?
+                """, (position["id"],)).fetchone()[0]
+                
+                position["transactionCount"] = tx_count
+                
+                positions.append(position)
+            
+            return positions
+    
+    def update_user_position(
+        self,
+        position_id: str,
+        name: str = None,
+        description: str = None,
+        status: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Update a user position"""
+        updates = []
+        params = []
+        
+        if name is not None:
+            updates.append("name = ?")
+            params.append(name)
+        if description is not None:
+            updates.append("description = ?")
+            params.append(description)
+        if status is not None:
+            updates.append("status = ?")
+            params.append(status)
+        
+        if not updates:
+            return self.get_user_position(position_id)
+        
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        params.append(position_id)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(f"""
+                UPDATE user_positions
+                SET {', '.join(updates)}
+                WHERE id = ?
+            """, params)
+            conn.commit()
+        
+        return self.get_user_position(position_id)
+    
+    def delete_user_position(self, position_id: str) -> bool:
+        """Delete a user position and its transaction links"""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM position_transactions WHERE position_id = ?", (position_id,))
+            cursor = conn.execute("DELETE FROM user_positions WHERE id = ?", (position_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def add_transaction_to_position(self, position_id: str, transaction_id: str) -> bool:
+        """Add a transaction to a position"""
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                conn.execute("""
+                    INSERT OR IGNORE INTO position_transactions (position_id, transaction_id)
+                    VALUES (?, ?)
+                """, (position_id, transaction_id))
+                conn.commit()
+                return True
+            except Exception:
+                return False
+    
+    def remove_transaction_from_position(self, position_id: str, transaction_id: str) -> bool:
+        """Remove a transaction from a position"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                DELETE FROM position_transactions
+                WHERE position_id = ? AND transaction_id = ?
+            """, (position_id, transaction_id))
+            conn.commit()
+            return cursor.rowcount > 0
+    
+    def get_assigned_transaction_ids(self) -> set:
+        """Get all transaction IDs that are assigned to any position"""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT transaction_id FROM position_transactions"
+            ).fetchall()
+            return {row[0] for row in rows}
 
 
 def get_cache(wallet_address: str) -> TransactionCache:
