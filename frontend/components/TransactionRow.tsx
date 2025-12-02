@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { type Transaction, type TokenMeta, type ProjectMeta, formatCurrency } from "@/lib/api";
+import { calculateTxValues } from "@/lib/transaction-filters";
 import { MoreHorizontal, ExternalLink, Plus, FolderPlus, EyeOff, Eye } from "lucide-react";
 
 interface TransactionRowProps {
@@ -109,29 +110,10 @@ export function TransactionRow({
     return parts.length > 0 ? parts.join(", ") : tx.name || "Contract Interaction";
   };
   
-  // Calculate approximate USD value
-  const calculateUsdValue = () => {
-    let total = 0;
-    
-    for (const recv of transaction.receives) {
-      const token = tokenDict[recv.token_id];
-      if (token?.price) {
-        total += recv.amount * token.price;
-      }
-    }
-    
-    for (const send of transaction.sends) {
-      const token = tokenDict[send.token_id];
-      if (token?.price) {
-        total -= send.amount * token.price;
-      }
-    }
-    
-    return total;
-  };
-  
+  // Calculate USD value using historical prices when available
+  const { totalIn, totalOut, netValue } = calculateTxValues(transaction, tokenDict);
   const tokenSummary = buildTokenSummary();
-  const usdValue = calculateUsdValue();
+  const usdValue = netValue;
   const hasValue = Math.abs(usdValue) > 0.01;
   const isPositive = usdValue >= 0;
   

@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
 import { type Transaction, type TokenMeta, type ProjectMeta } from "@/lib/api";
+import { calculateTxValues } from "@/lib/transaction-filters";
 import { TransactionRowCompact } from "./TransactionRowCompact";
 import { getTxKey } from "@/lib/reconciliation/storage";
 
@@ -30,18 +31,10 @@ interface TransactionListProps {
   emptyMessage?: string;
 }
 
-// Calculate USD value for a transaction
+// Calculate USD value for a transaction (uses historical prices when available)
 function calculateTxValue(tx: Transaction, tokenDict: Record<string, TokenMeta>): number {
-  let total = 0;
-  for (const recv of tx.receives || []) {
-    const token = tokenDict[recv.token_id];
-    if (token?.price) total += recv.amount * token.price;
-  }
-  for (const send of tx.sends || []) {
-    const token = tokenDict[send.token_id];
-    if (token?.price) total -= send.amount * token.price;
-  }
-  return total;
+  const { netValue } = calculateTxValues(tx, tokenDict);
+  return netValue;
 }
 
 // Column header component with sort indicator

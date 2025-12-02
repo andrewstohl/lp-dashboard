@@ -10,6 +10,11 @@ export interface TokenTransfer {
   token_id: string;
   from_addr?: string;
   to_addr?: string;
+  // Historical price fields (added by price enrichment)
+  price_usd?: number;
+  value_usd?: number;
+  symbol?: string;
+  _price_source?: 'historical' | 'current';
 }
 
 // Transaction details from DeBank
@@ -40,6 +45,11 @@ export interface Transaction {
     token_id: string;
     value: number;
   } | null;
+  // Historical value fields (added by price enrichment)
+  _totalIn?: number;
+  _totalOut?: number;
+  _netValue?: number;
+  _flowDirection?: 'INCREASE' | 'DECREASE' | 'OVERHEAD';
 }
 
 // Token metadata from DeBank

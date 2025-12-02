@@ -302,9 +302,9 @@ async def _enrich_transactions_with_historical_prices(
         # Filter out _attempted markers and lowercase keys for consistent lookups
         actual_prices = {k.lower(): v for k, v in cached_prices.items() if k != "_attempted"} if cached_prices else {}
         
-        # Apply any cached prices we have
-        if actual_prices:
-            _apply_prices_to_transaction(tx, actual_prices, token_dict)
+        # Always apply prices to ensure tokens have price_usd set
+        # This uses cached historical prices if available, otherwise falls back to token_dict
+        _apply_prices_to_transaction(tx, actual_prices, token_dict)
         
         # If we already attempted this tx (has _attempted marker), don't retry API calls
         if cached_prices and "_attempted" in cached_prices:
@@ -465,9 +465,106 @@ def _apply_prices_to_transaction(tx: Dict, cached_prices: Dict, token_dict: Dict
             token["_price_source"] = "current"
 
 
+def _extract_lp_pool_address(tx: Dict) -> str:
+    """
+    Extract the pool address from an LP transaction.
+    
+    For sends: uses to_addr (where tokens are sent to the pool)
+    For receives: uses from_addr (where tokens come from the pool)
+    
+    Returns the pool address or "unknown" if can't determine.
+    """
+    pool_addrs = set()
+    
+    # Get to_addr from sends (depositing to pool)
+    for t in tx.get("sends") or []:
+        to_addr = t.get("to_addr", "")
+        # Skip NFT-related addresses (zero address for minting)
+        if to_addr and to_addr != "0x0000000000000000000000000000000000000000":
+            pool_addrs.add(to_addr.lower())
+    
+    # Get from_addr from receives (withdrawing from pool)
+    for t in tx.get("receives") or []:
+        from_addr = t.get("from_addr", "")
+        # Skip zero address (NFT minting)
+        if from_addr and from_addr != "0x0000000000000000000000000000000000000000":
+            pool_addrs.add(from_addr.lower())
+    
+    if pool_addrs:
+        # Return first pool address found (should typically be only one)
+        return list(pool_addrs)[0]
+    return "unknown"
+
+
+def _extract_lp_token_pair(tx: Dict, token_dict: Dict) -> str:
+    """
+    Extract the token pair from an LP transaction.
+    
+    Returns a normalized pair string like "LINK/WETH" or "Unknown" if can't determine.
+    Excludes NFT tokens (amount=1) and sorts alphabetically for consistency.
+    """
+    tokens = set()
+    
+    for t in (tx.get("sends") or []) + (tx.get("receives") or []):
+        amount = t.get("amount", 0)
+        token_id = t.get("token_id", "")
+        
+        # Skip NFTs (amount=1 with 32-char hex token_id)
+        if amount == 1 and len(token_id) == 32:
+            continue
+        
+        if not token_id:
+            continue
+            
+        # Get symbol from transaction data first, then token_dict
+        symbol = t.get("symbol") or ""
+        if not symbol:
+            token_info = token_dict.get(token_id, {})
+            symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        
+        # Normalize ETH variants
+        if token_id.lower() == "eth" or symbol.upper() in ["ETH", "WETH"]:
+            tokens.add("ETH")
+        elif symbol:
+            tokens.add(symbol.upper())
+        else:
+            # Use abbreviated address for unknown tokens
+            tokens.add(token_id[:10])
+    
+    if len(tokens) >= 2:
+        # Sort alphabetically, but put ETH last for readability (e.g., "LINK/ETH" not "ETH/LINK")
+        token_list = sorted(tokens)
+        if "ETH" in token_list:
+            token_list.remove("ETH")
+            token_list.append("ETH")
+        return "/".join(token_list[:2])
+    elif len(tokens) == 1:
+        return list(tokens)[0]
+    else:
+        return "Unknown"
+
+
+def _extract_nft_id(tx: Dict) -> str:
+    """
+    Extract NFT position ID from an LP transaction if present.
+    
+    NFT IDs appear in receives for mint transactions (amount=1, 32-char hex).
+    Returns the NFT ID or empty string if not found.
+    """
+    for t in (tx.get("receives") or []) + (tx.get("sends") or []):
+        amount = t.get("amount", 0)
+        token_id = t.get("token_id", "")
+        if amount == 1 and len(token_id) == 32:
+            return token_id
+    return ""
+
+
 def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
     """
-    Group transactions by chain > protocol > type > token.
+    Group transactions by chain > protocol > type > token pair.
+    
+    For LP transactions, groups by the token pair (e.g., "LINK/WETH").
+    For other transactions, groups by primary token.
     
     Returns nested dict structure with transactions and metadata per group.
     """
@@ -482,7 +579,10 @@ def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
         cate_id = tx.get("cate_id", "")
         
         # Determine type
-        if any(kw in tx_name for kw in ["mint", "burn", "increaseliquidity", "decreaseliquidity", "collect"]):
+        is_lp = any(kw in tx_name for kw in ["mint", "burn", "increaseliquidity", "decreaseliquidity", "collect", "multicall"])
+        is_lp_protocol = any(p in project_id.lower() for p in ["uniswap", "aero", "velo", "pancake", "sushi", "curve", "balancer"])
+        
+        if is_lp and is_lp_protocol:
             tx_type = "lp"
         elif any(kw in tx_name for kw in ["executeorder", "createorder", "cancelorder", "multicall"]) and "gmx" in project_id:
             tx_type = "perpetual"
@@ -491,28 +591,45 @@ def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
         else:
             tx_type = "other"
         
-        # Get flow info for primary token
-        flow = _infer_flow_direction(tx, token_dict)
-        primary_symbol = flow.get("primary_token", {}).get("symbol", "unknown") if flow.get("primary_token") else "unknown"
+        # Get token identifier based on transaction type
+        if tx_type == "lp":
+            # For LP: group by token pair (e.g., "LINK/ETH")
+            token_pair = _extract_lp_token_pair(tx, token_dict)
+            nft_id = _extract_nft_id(tx)
+            group_identifier = token_pair
+            display_name = token_pair
+            # Store NFT ID on transaction if present
+            if nft_id:
+                tx["_nft_id"] = nft_id
+        else:
+            # For others: use primary token from flow analysis
+            flow = _infer_flow_direction(tx, token_dict)
+            group_identifier = flow.get("primary_token", {}).get("symbol", "Unknown") if flow.get("primary_token") else "Unknown"
+            display_name = group_identifier
+            tx["_flow"] = flow
         
         # Build group key
-        group_key = f"{chain}|{project_id}|{tx_type}|{primary_symbol}"
+        group_key = f"{chain}|{project_id}|{tx_type}|{group_identifier}"
         
         if group_key not in groups:
             groups[group_key] = {
                 "chain": chain,
                 "protocol": project_id,
                 "type": tx_type,
-                "token": primary_symbol,
+                "token": display_name,
                 "transactions": [],
                 "total_in": 0.0,
                 "total_out": 0.0,
                 "latest_time": 0,
-                "is_open": False  # Will be set based on DeBank positions
+                "is_open": False
             }
         
-        # Add flow data to transaction
-        tx["_flow"] = flow
+        # Add flow data to transaction if not already set
+        if "_flow" not in tx:
+            flow = _infer_flow_direction(tx, token_dict)
+            tx["_flow"] = flow
+        else:
+            flow = tx["_flow"]
         
         groups[group_key]["transactions"].append(tx)
         groups[group_key]["total_in"] += flow["receives_value"]

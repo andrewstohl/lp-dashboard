@@ -8,7 +8,70 @@
  * - Deploy transactions (usually spam NFTs)
  */
 
-import { type Transaction, type TokenMeta } from './api';
+import { type Transaction, type TokenMeta, type TokenTransfer } from './api';
+
+/**
+ * Get the USD value for a token transfer.
+ * PRIORITY: Historical price (price_usd/value_usd) > Current price (tokenDict)
+ * 
+ * This ensures transaction values reflect prices at the time of the transaction,
+ * not current market prices.
+ */
+export function getTokenTransferValue(
+  transfer: TokenTransfer,
+  tokenDict: Record<string, TokenMeta>
+): number {
+  // Priority 1: Pre-calculated historical value
+  if (transfer.value_usd !== undefined && transfer.value_usd !== null) {
+    return transfer.value_usd;
+  }
+  
+  // Priority 2: Historical price * amount
+  if (transfer.price_usd !== undefined && transfer.price_usd !== null) {
+    return transfer.amount * transfer.price_usd;
+  }
+  
+  // Priority 3: Current price from tokenDict (fallback)
+  const token = tokenDict[transfer.token_id];
+  if (token?.price) {
+    return transfer.amount * token.price;
+  }
+  
+  return 0;
+}
+
+/**
+ * Calculate total in/out values for a transaction.
+ * Uses historical prices when available (from Build page enrichment),
+ * falls back to current prices (from tokenDict) when not.
+ */
+export function calculateTxValues(
+  tx: Transaction,
+  tokenDict: Record<string, TokenMeta>
+): { totalIn: number; totalOut: number; netValue: number } {
+  // Priority 1: Use pre-calculated historical totals if available
+  if (tx._totalIn !== undefined && tx._totalOut !== undefined) {
+    return {
+      totalIn: tx._totalIn,
+      totalOut: tx._totalOut,
+      netValue: tx._totalIn - tx._totalOut
+    };
+  }
+  
+  // Priority 2: Calculate from individual token prices
+  let totalIn = 0;
+  let totalOut = 0;
+  
+  for (const recv of tx.receives || []) {
+    totalIn += getTokenTransferValue(recv, tokenDict);
+  }
+  
+  for (const send of tx.sends || []) {
+    totalOut += getTokenTransferValue(send, tokenDict);
+  }
+  
+  return { totalIn, totalOut, netValue: totalIn - totalOut };
+}
 
 // Spam detection keywords
 const SPAM_KEYWORDS = [
@@ -80,33 +143,15 @@ export function isDeployTransaction(tx: Transaction): boolean {
 }
 
 /**
- * Calculate USD value of a transaction
+ * Calculate USD value of a transaction (total of sends + receives).
+ * Uses historical prices when available, falls back to current prices.
  */
 export function calculateTransactionValue(
   tx: Transaction,
   tokenDict: Record<string, TokenMeta>
 ): number {
-  let totalValue = 0;
-  
-  // Sum sends
-  for (const send of tx.sends || []) {
-    const tokenId = send.token_id || '';
-    const tokenInfo = tokenDict[tokenId];
-    const price = tokenInfo?.price || 0;
-    const amount = Math.abs(send.amount || 0);
-    totalValue += amount * price;
-  }
-  
-  // Sum receives
-  for (const receive of tx.receives || []) {
-    const tokenId = receive.token_id || '';
-    const tokenInfo = tokenDict[tokenId];
-    const price = tokenInfo?.price || 0;
-    const amount = Math.abs(receive.amount || 0);
-    totalValue += amount * price;
-  }
-  
-  return totalValue;
+  const { totalIn, totalOut } = calculateTxValues(tx, tokenDict);
+  return totalIn + totalOut;
 }
 
 /**
