@@ -202,7 +202,11 @@ export function TransactionsColumn({
                       <div
                         key={tx.id}
                         draggable
-                        onDragStart={() => onDragStart?.(tx.id, group.groupKey)}
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData("transactionId", tx.id);
+                          e.dataTransfer.setData("groupKey", group.groupKey);
+                          onDragStart?.(tx.id, group.groupKey);
+                        }}
                         className="flex items-center gap-2 px-4 py-2 hover:bg-[#161B22] border-b border-[#21262D] last:border-b-0 cursor-grab"
                       >
                         <GripVertical className="w-3 h-3 text-[#30363D]" />

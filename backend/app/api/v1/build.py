@@ -20,7 +20,7 @@ from backend.services.discovery import get_discovery_service, DEFAULT_CHAIN_NAME
 from backend.services.transaction_cache import get_cache
 from backend.services.coingecko_prices import get_price_service
 from backend.services.debank import get_debank_service
-from backend.app.api.v1.position_lifecycle import process_positions_with_lifecycle_detection
+# NOTE: position_lifecycle import removed - old auto-matching system deprecated
 from backend.app.api.v1.transaction_grouping import group_transactions, infer_flow_direction
 
 logger = logging.getLogger(__name__)
@@ -1361,376 +1361,33 @@ async def get_positions_with_transactions(
     since: Optional[str] = Query("6m", description="Transaction lookback period")
 ) -> Dict[str, Any]:
     """
-    Fetch positions and link transactions to each position.
+    DEPRECATED: This endpoint used the old auto-matching system.
     
-    This is the core Build page endpoint that:
-    1. Fetches open positions from DeBank
-    2. Fetches transactions from cache
-    3. Links transactions to positions by matching identifiers
-    4. Returns unmatched transactions separately
+    Use these endpoints instead:
+    - GET /transactions/grouped - Get transactions grouped by protocol/type/token
+    - GET /user-positions - Get user-created positions
+    - POST /user-positions/{id}/transactions/{txId} - Add transaction to position
     """
-    try:
-        # Get positions
-        positions_response = await get_build_positions(wallet)
-        positions = positions_response["data"]["positions"]
-        
-        # Get transactions
-        until_dt = datetime.now()
-        since_dt = _parse_date(since) if since else (until_dt - timedelta(days=180))
-        
-        discovery = await get_discovery_service()
-        tx_result = await discovery.discover_transactions(
-            wallet_address=wallet,
-            chains=None,
-            since=since_dt,
-            until=until_dt,
-            force_refresh=False
-        )
-        
-        all_transactions = tx_result["transactions"]
-        token_dict = tx_result["token_dict"]
-        
-        # Collect all token addresses from transactions for price enrichment
-        token_addresses = set()
-        for tx in all_transactions:
-            for send in (tx.get("sends") or []):
-                if send.get("token_id"):
-                    token_addresses.add(send["token_id"])
-            for recv in (tx.get("receives") or []):
-                if recv.get("token_id"):
-                    token_addresses.add(recv["token_id"])
-        
-        # Enrich token_dict with current prices for known tokens
-        price_service = get_price_service()
-        token_dict = await price_service.enrich_token_dict(token_dict, list(token_addresses))
-        
-        # Apply MVT filtering
-        filtered_txs, _ = _filter_transactions(
-            all_transactions, token_dict,
-            show_spam=False, show_dust=False, 
-            show_approvals=False, show_bridges_swaps=False, show_failed=False
-        )
-        
-        # Link transactions to positions
-        position_transactions = {p["id"]: [] for p in positions}
-        unmatched_transactions = []
-        
-        for tx in filtered_txs:
-            matched_position_id = _match_transaction_to_position(tx, positions, token_dict)
-            
-            if matched_position_id:
-                position_transactions[matched_position_id].append(tx)
-            else:
-                unmatched_transactions.append(tx)
-        
-        # Add transactions to positions
-        for position in positions:
-            position["transactions"] = position_transactions.get(position["id"], [])
-            position["transactionCount"] = len(position["transactions"])
-            position["status"] = "open"
-        
-        # Split yield/lending positions into lifecycles
-        # This handles cases where multiple deposit/withdraw cycles are grouped together
-        positions = process_positions_with_lifecycle_detection(positions, token_dict)
-        
-        # Recalculate open vs closed after lifecycle detection
-        open_positions = [p for p in positions if p.get("status") == "open"]
-        closed_from_lifecycle = [p for p in positions if p.get("status") == "closed"]
-        
-        # Build closed positions from unmatched transactions
-        closed_positions = _build_closed_positions(unmatched_transactions, token_dict)
-        
-        # Combine all closed positions
-        all_closed = closed_from_lifecycle + closed_positions
-        
-        # Combine open and closed positions
-        all_positions = open_positions + all_closed
-        
-        # Recalculate unmatched (only those that didn't get grouped into closed positions)
-        closed_tx_count = sum(p.get("transactionCount", 0) for p in closed_positions)
-        truly_unmatched = len(unmatched_transactions) - closed_tx_count
-        
-        return {
-            "status": "success",
-            "data": {
-                "transactions": filtered_txs,
-                "positions": all_positions,
-                "openPositions": open_positions,
-                "closedPositions": all_closed,
-                "unmatchedTransactions": [tx for tx in unmatched_transactions if not tx.get("project_id")],
-                "wallet": wallet.lower(),
-                "tokenDict": token_dict,
-                "summary": {
-                    "total": len(filtered_txs),
-                    "totalPositions": len(all_positions),
-                    "openPositions": len(open_positions),
-                    "closedPositions": len(all_closed),
-                    "totalTransactions": len(filtered_txs),
-                    "matchedTransactions": len(filtered_txs) - truly_unmatched,
-                    "unmatchedTransactions": truly_unmatched,
-                    "matchRate": f"{((len(filtered_txs) - truly_unmatched) / len(filtered_txs) * 100):.1f}%" if filtered_txs else "0%"
-                }
-            }
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "This endpoint is deprecated",
+            "message": "Use /transactions/grouped and /user-positions instead",
+            "alternatives": [
+                "GET /api/v1/build/transactions/grouped",
+                "GET /api/v1/build/user-positions",
+                "POST /api/v1/build/user-positions/{id}/transactions/{txId}"
+            ]
         }
-        
-    except Exception as e:
-        logger.exception(f"Error getting positions with transactions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get positions with transactions", "message": str(e)}
-        )
+    )
 
 
-def _match_transaction_to_position(tx: Dict, positions: List[Dict], token_dict: Dict) -> Optional[str]:
-    """
-    Match a transaction to a position.
-    
-    Matching strategies (in priority order):
-    1. Exact NFT tokenId match (for LP positions)
-    2. Protocol + chain match (for all position types)
-    3. Pool address match (for yield/lending)
-    """
-    tx_project = (tx.get("project_id") or "").lower()
-    tx_chain = tx.get("chain", "")
-    tx_name = (tx.get("tx", {}).get("name") or "").lower()
-    
-    # Skip if no project (can't match)
-    if not tx_project:
-        return None
-    
-    # Build list of candidate positions on same chain
-    candidates = []
-    
-    for position in positions:
-        pos_protocol = (position.get("protocol") or "").lower()
-        pos_chain = position.get("chain", "")
-        pos_type = position.get("type", "")
-        
-        # Chain must match
-        if pos_chain != tx_chain:
-            continue
-        
-        # Protocol must be related
-        # Handle various naming: uniswap3 <-> uniswap, arb_gmx2 <-> gmx, etc.
-        protocol_match = False
-        if pos_protocol and tx_project:
-            # Extract core protocol name (remove chain prefix/suffix)
-            pos_core = pos_protocol.replace("arb_", "").replace("eth_", "").replace("base_", "").replace("uni_", "")
-            tx_core = tx_project.replace("arb_", "").replace("eth_", "").replace("base_", "").replace("uni_", "")
-            
-            if pos_core in tx_core or tx_core in pos_core:
-                protocol_match = True
-            # Special cases
-            if "gmx" in pos_core and "gmx" in tx_core:
-                protocol_match = True
-            if "uniswap" in pos_core and "uniswap" in tx_core:
-                protocol_match = True
-            if "euler" in pos_core and "euler" in tx_core:
-                protocol_match = True
-        
-        if protocol_match:
-            candidates.append(position)
-    
-    # If we have exactly one candidate, return it
-    if len(candidates) == 1:
-        return candidates[0]["id"]
-    
-    # If multiple candidates, try to narrow down
-    if len(candidates) > 1:
-        # For perpetuals, all GMX trades go to the GMX positions
-        # We can't distinguish which specific position without deeper analysis
-        # For now, match to the first perpetual if it's a GMX transaction
-        perp_candidates = [c for c in candidates if c.get("type") == "perpetual"]
-        if perp_candidates and "gmx" in tx_project:
-            return perp_candidates[0]["id"]
-        
-        # For LP, match to LP positions
-        lp_candidates = [c for c in candidates if c.get("type") == "lp"]
-        if lp_candidates and tx_name in ["mint", "burn", "increaseliquidity", "decreaseliquidity", "collect"]:
-            return lp_candidates[0]["id"]
-        
-        # For yield, match any yield position
-        yield_candidates = [c for c in candidates if c.get("type") in ["yield", "lending"]]
-        if yield_candidates:
-            return yield_candidates[0]["id"]
-        
-        # Default to first candidate
-        return candidates[0]["id"]
-    
-    return None
-
-
-def _build_closed_positions(unmatched_txs: List[Dict], token_dict: Dict) -> List[Dict]:
-    """
-    Build closed position entries from unmatched transactions.
-    
-    Groups transactions by protocol + chain to identify potential closed positions.
-    """
-    # Group transactions by protocol + chain
-    groups = {}
-    
-    for tx in unmatched_txs:
-        project = tx.get("project_id") or ""
-        chain = tx.get("chain", "")
-        
-        if not project:
-            continue
-            
-        key = f"{project}_{chain}"
-        if key not in groups:
-            groups[key] = {
-                "protocol": project,
-                "chain": chain,
-                "transactions": [],
-                "earliest": None,
-                "latest": None
-            }
-        
-        groups[key]["transactions"].append(tx)
-        
-        tx_time = tx.get("time_at", 0)
-        if groups[key]["earliest"] is None or tx_time < groups[key]["earliest"]:
-            groups[key]["earliest"] = tx_time
-        if groups[key]["latest"] is None or tx_time > groups[key]["latest"]:
-            groups[key]["latest"] = tx_time
-    
-    # Convert groups to closed position objects
-    closed_positions = []
-    
-    for key, group in groups.items():
-        txs = group["transactions"]
-        if len(txs) < 1:
-            continue
-        
-        # Determine position type from transactions
-        pos_type = _infer_position_type(txs)
-        
-        # Calculate total value from transactions
-        total_value = 0.0
-        for tx in txs:
-            for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
-                token_id = token.get("token_id", "")
-                amount = float(token.get("amount", 0))
-                info = token_dict.get(token_id, {})
-                price = float(info.get("price", 0) or 0)
-                total_value += amount * price
-        
-        # Generate ID and name
-        protocol_name = group["protocol"].replace("arb_", "").replace("eth_", "").replace("base_", "").title()
-        
-        position = {
-            "id": f"closed_{key}",
-            "protocol": group["protocol"],
-            "protocolName": protocol_name,
-            "chain": group["chain"],
-            "type": pos_type,
-            "name": f"Closed {protocol_name}",
-            "positionIndex": None,
-            "poolId": None,
-            "valueUsd": 0,  # Closed positions have 0 current value
-            "historicalValueUsd": total_value,
-            "detailTypes": [],
-            "status": "closed",
-            "openedAt": group["earliest"],
-            "closedAt": group["latest"],
-            "transactionCount": len(txs),
-            "transactions": txs
-        }
-        
-        # Generate display name
-        position["displayName"] = _generate_closed_position_name(position, txs, token_dict)
-        
-        closed_positions.append(position)
-    
-    return closed_positions
-
-
-def _infer_position_type(txs: List[Dict]) -> str:
-    """Infer position type from transaction patterns"""
-    tx_names = [tx.get("tx", {}).get("name", "").lower() for tx in txs]
-    projects = [tx.get("project_id", "").lower() for tx in txs]
-    
-    # Check for perpetual indicators
-    if any("gmx" in p for p in projects):
-        if any(name in ["executeorder", "batch", "createorder"] for name in tx_names):
-            return "perpetual"
-    
-    # Check for LP indicators
-    lp_keywords = ["mint", "burn", "increaseliquidity", "decreaseliquidity", "addliquidity", "removeliquidity"]
-    if any(keyword in name for name in tx_names for keyword in lp_keywords):
-        return "lp"
-    
-    # Check for yield/lending indicators
-    yield_keywords = ["deposit", "withdraw", "supply", "borrow", "repay", "stake", "unstake"]
-    if any(keyword in name for name in tx_names for keyword in yield_keywords):
-        return "yield"
-    
-    return "other"
-
-
-def _generate_closed_position_name(position: Dict, txs: List[Dict], token_dict: Dict) -> str:
-    """
-    Generate a display name for a closed position.
-    
-    Format: [Protocol] [Type] [Asset(s)] [MM/DD/YY]
-    Examples:
-    - PancakeSwap LP CAKE/BNB 10/05/24
-    - Uniswap LP ETH/USDC 09/01/24
-    - Astherus Yield 11/15/24
-    """
-    protocol = position.get("protocolName", "Unknown")
-    # Clean up protocol name
-    protocol = protocol.replace("Bsc_", "").replace("Arb_", "").replace("Eth_", "").replace("Base_", "")
-    protocol = protocol.replace("Matic_", "").replace("Uni_", "")
-    
-    pos_type = position.get("type", "")
-    
-    # Get open date from position
-    opened_at = position.get("openedAt")
-    date_str = ""
-    if opened_at:
-        from datetime import datetime
-        dt = datetime.fromtimestamp(opened_at)
-        date_str = dt.strftime("%m/%d/%y")
-    
-    # Try to extract token symbols from transactions
-    token_symbols = []
-    for tx in txs[:10]:  # Check first 10 transactions
-        for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
-            token_id = token.get("token_id", "")
-            if token_id and not token_id.startswith("0x0000"):
-                # Look up symbol from token_dict
-                token_info = token_dict.get(token_id, {})
-                symbol = token_info.get("symbol") or token_info.get("optimized_symbol")
-                if symbol and symbol not in token_symbols and len(token_symbols) < 2:
-                    token_symbols.append(symbol)
-    
-    # Build name based on type
-    if pos_type == "perpetual":
-        assets = token_symbols[0] if token_symbols else ""
-        return f"{protocol} Perp {assets} {date_str}".strip()
-    elif pos_type == "lp":
-        if len(token_symbols) >= 2:
-            assets = f"{token_symbols[0]}/{token_symbols[1]}"
-        elif token_symbols:
-            assets = token_symbols[0]
-        else:
-            assets = ""
-        return f"{protocol} LP {assets} {date_str}".strip()
-    elif pos_type == "yield":
-        assets = token_symbols[0] if token_symbols else ""
-        return f"{protocol} Yield {assets} {date_str}".strip()
-    else:
-        return f"{protocol} {date_str}".strip()
-    if pos_type == "perpetual":
-        return f"{protocol} Perp (Closed)"
-    elif pos_type == "lp":
-        return f"{protocol} LP (Closed)"
-    elif pos_type == "yield":
-        return f"{protocol} Yield (Closed)"
-    
-    return f"{protocol} Position (Closed)"
-
+# NOTE: The following functions were part of the old auto-matching system and are deprecated:
+# - _match_transaction_to_position
+# - _build_closed_positions  
+# - _infer_position_type
+# - _generate_closed_position_name
+# They have been removed in favor of user-created positions via /user-positions endpoints.
 
 
 # ===== Phase 7: Strategy Persistence API =====

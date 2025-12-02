@@ -83,6 +83,25 @@ export function PositionsColumn({
   const [expandedPositions, setExpandedPositions] = useState<Set<string>>(new Set());
   const [editingPosition, setEditingPosition] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [dragOverPosition, setDragOverPosition] = useState<string | null>(null);
+
+  const handleDragOver = (e: React.DragEvent, positionId: string) => {
+    e.preventDefault();
+    setDragOverPosition(positionId);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverPosition(null);
+  };
+
+  const handleDrop = (e: React.DragEvent, positionId: string) => {
+    e.preventDefault();
+    setDragOverPosition(null);
+    const transactionId = e.dataTransfer.getData("transactionId");
+    if (transactionId && onDropTransaction) {
+      onDropTransaction(positionId, transactionId);
+    }
+  };
 
   const toggleExpand = (posId: string) => {
     setExpandedPositions((prev) => {
@@ -257,6 +276,10 @@ export function PositionsColumn({
                     isExpanded={expandedPositions.has(pos.id)}
                     isEditing={editingPosition === pos.id}
                     editName={editName}
+                    isDragOver={dragOverPosition === pos.id}
+                    onDragOver={(e) => handleDragOver(e, pos.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, pos.id)}
                     onToggle={() => toggleExpand(pos.id)}
                     onStartEdit={() => startEditing(pos)}
                     onSaveEdit={saveEdit}
@@ -289,6 +312,10 @@ export function PositionsColumn({
                     isExpanded={expandedPositions.has(pos.id)}
                     isEditing={editingPosition === pos.id}
                     editName={editName}
+                    isDragOver={dragOverPosition === pos.id}
+                    onDragOver={(e) => handleDragOver(e, pos.id)}
+                    onDragLeave={handleDragLeave}
+                    onDrop={(e) => handleDrop(e, pos.id)}
                     onToggle={() => toggleExpand(pos.id)}
                     onStartEdit={() => startEditing(pos)}
                     onSaveEdit={saveEdit}
@@ -318,6 +345,10 @@ function PositionCard({
   isExpanded,
   isEditing,
   editName,
+  isDragOver,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   onToggle,
   onStartEdit,
   onSaveEdit,
@@ -336,6 +367,10 @@ function PositionCard({
   isExpanded: boolean;
   isEditing: boolean;
   editName: string;
+  isDragOver?: boolean;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: () => void;
+  onDrop?: (e: React.DragEvent) => void;
   onToggle: () => void;
   onStartEdit: () => void;
   onSaveEdit: () => void;
@@ -356,7 +391,12 @@ function PositionCard({
   };
 
   return (
-    <div className="border-b border-[#21262D] last:border-b-0">
+    <div 
+      className={`border-b border-[#21262D] last:border-b-0 transition-colors ${isDragOver ? 'bg-[#388bfd33] border-[#58A6FF]' : ''}`}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       {/* Main Row */}
       <div className="px-4 py-3 hover:bg-[#21262D] transition-colors">
         <div className="flex items-start justify-between">

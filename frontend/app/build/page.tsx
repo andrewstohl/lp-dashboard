@@ -575,23 +575,23 @@ export default function BuildPage() {
           <div className="max-w-[1800px] mx-auto px-6 py-2">
             <div className="flex items-center gap-6 text-sm">
               <span className="text-[#8B949E]">
-                <span className="text-[#E6EDF3] font-medium">{data.summary.totalPositions}</span> positions
+                <span className="text-[#E6EDF3] font-medium">{transactionGroups.length}</span> groups
               </span>
               <span className="text-[#8B949E]">
-                <span className="text-[#3FB950] font-medium">{data.summary.openPositions}</span> open
-              </span>
-              <span className="text-[#8B949E]">
-                <span className="text-[#E6EDF3] font-medium">{data.summary.closedPositions}</span> closed
+                <span className="text-[#E6EDF3] font-medium">
+                  {transactionGroups.reduce((sum, g) => sum + g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length, 0)}
+                </span> unassigned txs
               </span>
               <span className="text-[#30363D]">|</span>
               <span className="text-[#8B949E]">
-                <span className="text-[#E6EDF3] font-medium">{data.summary.matchedTransactions}</span> matched txs
+                <span className="text-[#3FB950] font-medium">{userPositions.length}</span> positions
               </span>
               <span className="text-[#8B949E]">
-                <span className="text-[#F0883E] font-medium">{data.unmatchedTransactions?.length || 0}</span> unmatched
+                <span className="text-[#58A6FF] font-medium">{assignedTxIds.size}</span> assigned txs
               </span>
+              <span className="text-[#30363D]">|</span>
               <span className="text-[#8B949E]">
-                Match rate: <span className="text-[#58A6FF] font-medium">{data.summary.matchRate}</span>
+                <span className="text-[#A371F7] font-medium">{strategies.length}</span> strategies
               </span>
             </div>
           </div>
@@ -672,6 +672,7 @@ export default function BuildPage() {
               onRemoveTransaction={handleRemoveTransactionFromPosition}
               onRenamePosition={handleRenamePosition}
               onCreatePosition={() => setShowCreatePosition(true)}
+              onDropTransaction={handleAddTransactionToPosition}
               isLoading={loading}
             />
 
