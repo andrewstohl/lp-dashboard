@@ -589,7 +589,7 @@ class TransactionCache:
             return position
     
     def get_all_user_positions(self) -> List[Dict[str, Any]]:
-        """Get all user-created positions"""
+        """Get all user-created positions with their transaction IDs"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             
@@ -602,13 +602,15 @@ class TransactionCache:
             for row in rows:
                 position = dict(row)
                 
-                # Get transaction count
-                tx_count = conn.execute("""
-                    SELECT COUNT(*) FROM position_transactions
+                # Get linked transaction IDs
+                tx_rows = conn.execute("""
+                    SELECT transaction_id FROM position_transactions
                     WHERE position_id = ?
-                """, (position["id"],)).fetchone()[0]
+                    ORDER BY added_at DESC
+                """, (position["id"],)).fetchall()
                 
-                position["transactionCount"] = tx_count
+                position["transactionIds"] = [r["transaction_id"] for r in tx_rows]
+                position["transactionCount"] = len(tx_rows)
                 
                 positions.append(position)
             

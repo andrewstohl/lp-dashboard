@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Wallet, RefreshCw, Loader2, AlertCircle } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 import { TransactionsColumn } from "@/components/build/TransactionsColumn";
@@ -436,6 +436,17 @@ export default function BuildPage() {
     }
   }, [walletAddress, fetchUserPositions]);
 
+  // Build transaction lookup map from all transaction groups
+  const transactionLookup = useMemo(() => {
+    const lookup = new Map<string, Transaction>();
+    transactionGroups.forEach(group => {
+      group.transactions.forEach(tx => {
+        lookup.set(tx.id, tx);
+      });
+    });
+    return lookup;
+  }, [transactionGroups]);
+
   // Create user position
   const handleCreatePosition = async (posData: { name: string; description: string }) => {
     try {
@@ -663,7 +674,9 @@ export default function BuildPage() {
                 valueUsd: 0,
                 status: up.status as "open" | "closed",
                 transactionCount: up.transactionCount,
-                transactions: []
+                transactions: (up.transactionIds || [])
+                  .map(txId => transactionLookup.get(txId))
+                  .filter((tx): tx is Transaction => tx !== undefined)
               }))}
               tokenDict={data?.tokenDict || {}}
               chainNames={chainNames}
