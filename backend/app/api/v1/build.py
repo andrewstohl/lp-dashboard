@@ -117,21 +117,28 @@ def _is_failed_transaction(tx: Dict) -> bool:
 def _is_dust_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 0.10) -> bool:
     """
     Detect dust transactions (total value < threshold).
+    Uses price_usd from token if available (historical), otherwise falls back to token_dict.
     """
     total_value = 0.0
     
     for token in tx.get("receives", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
         total_value += amount * price
     
     for token in tx.get("sends", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
         total_value += amount * price
     
     # If we can calculate value and it's below threshold, it's dust
@@ -147,6 +154,7 @@ def _is_overhead_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 
     significant value movement.
     
     Calculates: abs(receives_value - sends_value) < threshold
+    Uses price_usd from token if available (historical), otherwise falls back to token_dict.
     """
     receives_value = 0.0
     sends_value = 0.0
@@ -154,15 +162,21 @@ def _is_overhead_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 
     for token in tx.get("receives", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
         receives_value += amount * price
     
     for token in tx.get("sends", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
         sends_value += amount * price
     
     net_value = abs(receives_value - sends_value)
@@ -181,6 +195,8 @@ def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
     - sends_value: Total USD value sent
     - receives_value: Total USD value received
     - primary_token: Main token involved (largest value)
+    
+    Uses price_usd from token if available (historical), otherwise falls back to token_dict (current).
     """
     receives_value = 0.0
     sends_value = 0.0
@@ -190,11 +206,18 @@ def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
     for token in tx.get("receives", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        
+        # Prefer price_usd from token (historical) over token_dict (current)
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
+        
         value = amount * price
         receives_value += value
         
+        token_info = token_dict.get(token_id, {})
         if value > max_token_value:
             max_token_value = value
             primary_token = {
@@ -208,11 +231,18 @@ def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
     for token in tx.get("sends", []) or []:
         token_id = token.get("token_id", "")
         amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
+        
+        # Prefer price_usd from token (historical) over token_dict (current)
+        if "price_usd" in token and token["price_usd"] is not None:
+            price = token["price_usd"]
+        else:
+            token_info = token_dict.get(token_id, {})
+            price = token_info.get("price", 0) or 0
+        
         value = amount * price
         sends_value += value
         
+        token_info = token_dict.get(token_id, {})
         if value > max_token_value:
             max_token_value = value
             primary_token = {
@@ -242,6 +272,68 @@ def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
         "receives_value": receives_value,
         "primary_token": primary_token
     }
+
+
+def _apply_cached_prices_to_transactions(
+    transactions: List[Dict],
+    cache,
+    token_dict: Dict
+) -> List[Dict]:
+    """
+    Apply cached historical prices to transactions.
+    
+    For each transaction:
+    1. Check if we have cached historical prices
+    2. If yes, use those instead of token_dict current prices
+    3. If no, fall back to token_dict (current prices)
+    
+    This modifies the token amounts in-place by adding price_usd and value_usd.
+    """
+    for tx in transactions:
+        tx_id = tx.get("id", tx.get("tx", {}).get("hash", ""))
+        if not tx_id:
+            continue
+            
+        # Get cached historical prices for this transaction
+        cached_prices = cache.get_transaction_prices(tx_id)
+        
+        # Apply prices to sends
+        for token in tx.get("sends", []) or []:
+            token_id = token.get("token_id", "")
+            amount = float(token.get("amount", 0))
+            
+            if token_id in cached_prices:
+                # Use cached historical price
+                token["price_usd"] = cached_prices[token_id].get("price_usd", 0)
+                token["value_usd"] = cached_prices[token_id].get("price_usd", 0) * amount
+                token["_price_source"] = "historical"
+            else:
+                # Fall back to current price from token_dict
+                token_info = token_dict.get(token_id, {})
+                price = token_info.get("price", 0) or 0
+                token["price_usd"] = price
+                token["value_usd"] = price * amount
+                token["_price_source"] = "current"
+        
+        # Apply prices to receives
+        for token in tx.get("receives", []) or []:
+            token_id = token.get("token_id", "")
+            amount = float(token.get("amount", 0))
+            
+            if token_id in cached_prices:
+                # Use cached historical price
+                token["price_usd"] = cached_prices[token_id].get("price_usd", 0)
+                token["value_usd"] = cached_prices[token_id].get("price_usd", 0) * amount
+                token["_price_source"] = "historical"
+            else:
+                # Fall back to current price from token_dict
+                token_info = token_dict.get(token_id, {})
+                price = token_info.get("price", 0) or 0
+                token["price_usd"] = price
+                token["value_usd"] = price * amount
+                token["_price_source"] = "current"
+    
+    return transactions
 
 
 def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
@@ -848,6 +940,15 @@ async def get_grouped_transactions(
         all_transactions = result["transactions"]
         token_dict = result["token_dict"]
         
+        # Get cache for historical prices
+        cache = get_cache(wallet)
+        
+        # Apply cached historical prices to transactions (if available)
+        # This adds price_usd and value_usd to each token, preferring historical over current
+        all_transactions = _apply_cached_prices_to_transactions(
+            all_transactions, cache, token_dict
+        )
+        
         # Enrich token_dict with current prices for any missing tokens
         price_service = get_price_service()
         missing_tokens = []
@@ -901,6 +1002,21 @@ async def get_grouped_transactions(
         except Exception as e:
             logger.warning(f"Could not fetch open positions: {e}")
         
+        # Count transactions with/without historical prices
+        txs_with_historical = 0
+        txs_without_historical = 0
+        for group in groups:
+            for tx in group.get("transactions", []):
+                has_historical = False
+                for token in (tx.get("sends", []) or []) + (tx.get("receives", []) or []):
+                    if token.get("_price_source") == "historical":
+                        has_historical = True
+                        break
+                if has_historical:
+                    txs_with_historical += 1
+                else:
+                    txs_without_historical += 1
+        
         return {
             "status": "success",
             "data": {
@@ -911,6 +1027,11 @@ async def get_grouped_transactions(
                 "tokenDict": token_dict,
                 "projectDict": project_dict,
                 "hiddenCounts": hidden_counts,
+                "priceInfo": {
+                    "historicalPrices": txs_with_historical,
+                    "currentPrices": txs_without_historical,
+                    "needsEnrichment": txs_without_historical > 0
+                },
                 "filters": {
                     "since": since_dt.isoformat(),
                     "until": until_dt.isoformat(),
