@@ -17,9 +17,9 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# Cache directory
-CACHE_DIR = Path("/app/cache")
-CACHE_DIR.mkdir(exist_ok=True)
+# Cache directory - use local path if /app/cache doesn't exist (non-Docker)
+CACHE_DIR = Path("/app/cache") if Path("/app/cache").exists() or Path("/app").exists() else Path(__file__).parent.parent / "cache"
+CACHE_DIR.mkdir(exist_ok=True, parents=True)
 
 
 class TransactionCache:

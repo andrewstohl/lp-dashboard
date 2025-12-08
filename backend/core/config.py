@@ -4,7 +4,7 @@ from pydantic import Field, validator
 class Settings(BaseSettings):
     # API Keys
     kimi_api_key: str = Field(default="", description="Kimi K2 API key")
-    debank_access_key: str = Field(..., description="DeBank API access key")
+    debank_access_key: str = Field(default="", description="DeBank API access key")
     coingecko_api_key: str = Field(default="", description="CoinGecko API key")
     thegraph_api_key: str = Field(default="", description="The Graph API key")
 
@@ -24,9 +24,8 @@ class Settings(BaseSettings):
 
     @validator("debank_access_key")
     def validate_debank_key(cls, v):
-        if not v or v == "your_debank_key_here":
-            raise ValueError("DeBank API key must be set")
-        return v
+        # Allow empty key for development - will be required when fetching transactions
+        return v or ""
 
     @property
     def is_production(self) -> bool:
