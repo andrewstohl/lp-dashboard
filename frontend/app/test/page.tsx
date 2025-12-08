@@ -148,7 +148,20 @@ interface StrategyGMXItem {
   current_size_usd: number;
 }
 
-type StrategyItem = StrategyLPItem | StrategyGMXItem;
+interface StrategyGMXTradeItem {
+  type: "gmx_trade";
+  position_key: string;
+  market_name: string;
+  side: string;
+  tx_hash: string;
+  action: string;
+  size_delta_usd: number;
+  execution_price: number;
+  pnl_usd: number;
+  timestamp: number;
+}
+
+type StrategyItem = StrategyLPItem | StrategyGMXItem | StrategyGMXTradeItem;
 
 interface Strategy {
   id: string;
@@ -177,6 +190,7 @@ export default function TestPage() {
   // Strategy State
   const [selectedLPPositions, setSelectedLPPositions] = useState<Set<string>>(new Set());
   const [selectedGMXPositions, setSelectedGMXPositions] = useState<Set<string>>(new Set());
+  const [selectedGMXTrades, setSelectedGMXTrades] = useState<Set<string>>(new Set()); // "positionKey:txHash"
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [newStrategyName, setNewStrategyName] = useState("");
 
@@ -193,6 +207,7 @@ export default function TestPage() {
     setGMXHistories({});
     setSelectedLPPositions(new Set());
     setSelectedGMXPositions(new Set());
+    setSelectedGMXTrades(new Set());
 
     try {
       // Fetch LP and GMX positions in parallel
@@ -370,9 +385,20 @@ export default function TestPage() {
     setSelectedGMXPositions(newSelected);
   };
 
+  const toggleGMXTradeSelection = (positionKey: string, txHash: string) => {
+    const key = `${positionKey}:${txHash}`;
+    const newSelected = new Set(selectedGMXTrades);
+    if (newSelected.has(key)) {
+      newSelected.delete(key);
+    } else {
+      newSelected.add(key);
+    }
+    setSelectedGMXTrades(newSelected);
+  };
+
   const createStrategy = () => {
     if (!newStrategyName.trim()) return;
-    if (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0) return;
+    if (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0 && selectedGMXTrades.size === 0) return;
 
     const items: StrategyItem[] = [];
 
@@ -393,7 +419,7 @@ export default function TestPage() {
       }
     }
 
-    // Add selected GMX positions
+    // Add selected GMX positions (full position)
     for (const pos of gmxPositions) {
       if (selectedGMXPositions.has(pos.position_key)) {
         items.push({
@@ -404,6 +430,30 @@ export default function TestPage() {
           status: pos.status,
           current_size_usd: pos.current_size_usd,
         });
+      }
+    }
+
+    // Add selected GMX individual trades
+    for (const tradeKey of Array.from(selectedGMXTrades)) {
+      const [posKey, txHash] = tradeKey.split(":");
+      const pos = gmxPositions.find(p => p.position_key === posKey);
+      const history = gmxHistories[posKey];
+      if (pos && history) {
+        const tx = history.transactions.find(t => t.tx_hash === txHash);
+        if (tx) {
+          items.push({
+            type: "gmx_trade",
+            position_key: posKey,
+            market_name: pos.market_name,
+            side: pos.side,
+            tx_hash: txHash,
+            action: tx.action,
+            size_delta_usd: tx.size_delta_usd,
+            execution_price: tx.execution_price,
+            pnl_usd: tx.pnl_usd,
+            timestamp: tx.timestamp,
+          });
+        }
       }
     }
 
@@ -418,6 +468,7 @@ export default function TestPage() {
     setNewStrategyName("");
     setSelectedLPPositions(new Set());
     setSelectedGMXPositions(new Set());
+    setSelectedGMXTrades(new Set());
   };
 
   const removeStrategy = (strategyId: string) => {
@@ -812,6 +863,7 @@ export default function TestPage() {
                             <table className="w-full text-xs">
                               <thead className="sticky top-0 bg-[#0D1117]">
                                 <tr className="text-[#8B949E]">
+                                  <th className="text-left py-1 px-1 w-6"></th>
                                   <th className="text-left py-1 px-2">Date</th>
                                   <th className="text-left py-1 px-2">Action</th>
                                   <th className="text-right py-1 px-2">Size Δ</th>
@@ -821,37 +873,53 @@ export default function TestPage() {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-[#21262D]">
-                                {history.transactions.map((tx, txIdx) => (
-                                  <tr key={txIdx} className="hover:bg-[#161B22]">
-                                    <td className="py-2 px-2 text-[#8B949E]">
-                                      {formatDate(tx.timestamp)}
-                                    </td>
-                                    <td className={`py-2 px-2 font-medium ${getGMXActionColor(tx.action)}`}>
-                                      {tx.action}
-                                    </td>
-                                    <td className="py-2 px-2 text-right text-[#E6EDF3]">
-                                      {formatUSD(tx.size_delta_usd)}
-                                    </td>
-                                    <td className="py-2 px-2 text-right text-[#8B949E]">
-                                      {formatPrice(tx.execution_price)}
-                                    </td>
-                                    <td className={`py-2 px-2 text-right font-medium ${
-                                      tx.pnl_usd > 0 ? "text-[#3FB950]" : tx.pnl_usd < 0 ? "text-[#F85149]" : "text-[#8B949E]"
-                                    }`}>
-                                      {tx.pnl_usd !== 0 ? (tx.pnl_usd > 0 ? "+" : "") + formatUSD(tx.pnl_usd) : "-"}
-                                    </td>
-                                    <td className="py-2 px-2 text-right">
-                                      <a
-                                        href={`https://arbiscan.io/tx/${tx.tx_hash}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-[#58A6FF] hover:underline"
-                                      >
-                                        <ExternalLink className="w-3 h-3 inline" />
-                                      </a>
-                                    </td>
-                                  </tr>
-                                ))}
+                                {[...history.transactions].reverse().map((tx, txIdx) => {
+                                  const tradeKey = `${position.position_key}:${tx.tx_hash}`;
+                                  const isTradeSelected = selectedGMXTrades.has(tradeKey);
+                                  return (
+                                    <tr key={txIdx} className="hover:bg-[#161B22]">
+                                      <td className="py-2 px-1">
+                                        <button
+                                          onClick={() => toggleGMXTradeSelection(position.position_key, tx.tx_hash)}
+                                          className="flex-shrink-0"
+                                        >
+                                          {isTradeSelected ? (
+                                            <CheckSquare className="w-3 h-3 text-[#58A6FF]" />
+                                          ) : (
+                                            <Square className="w-3 h-3 text-[#8B949E] hover:text-[#58A6FF]" />
+                                          )}
+                                        </button>
+                                      </td>
+                                      <td className="py-2 px-2 text-[#8B949E]">
+                                        {formatDate(tx.timestamp)}
+                                      </td>
+                                      <td className={`py-2 px-2 font-medium ${getGMXActionColor(tx.action)}`}>
+                                        {tx.action}
+                                      </td>
+                                      <td className="py-2 px-2 text-right text-[#E6EDF3]">
+                                        {formatUSD(tx.size_delta_usd)}
+                                      </td>
+                                      <td className="py-2 px-2 text-right text-[#8B949E]">
+                                        {formatPrice(tx.execution_price)}
+                                      </td>
+                                      <td className={`py-2 px-2 text-right font-medium ${
+                                        tx.pnl_usd > 0 ? "text-[#3FB950]" : tx.pnl_usd < 0 ? "text-[#F85149]" : "text-[#8B949E]"
+                                      }`}>
+                                        {tx.pnl_usd !== 0 ? (tx.pnl_usd > 0 ? "+" : "") + formatUSD(tx.pnl_usd) : "-"}
+                                      </td>
+                                      <td className="py-2 px-2 text-right">
+                                        <a
+                                          href={`https://arbiscan.io/tx/${tx.tx_hash}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-[#58A6FF] hover:underline"
+                                        >
+                                          <ExternalLink className="w-3 h-3 inline" />
+                                        </a>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -894,19 +962,20 @@ export default function TestPage() {
 
                 {/* Selected Items Count */}
                 <div className="text-xs text-[#8B949E] mb-3">
-                  {selectedLPPositions.size + selectedGMXPositions.size > 0 ? (
+                  {selectedLPPositions.size + selectedGMXPositions.size + selectedGMXTrades.size > 0 ? (
                     <span>
                       <span className="text-[#58A6FF]">{selectedLPPositions.size}</span> LP +{" "}
-                      <span className="text-[#58A6FF]">{selectedGMXPositions.size}</span> Perp selected
+                      <span className="text-[#58A6FF]">{selectedGMXPositions.size}</span> Perp +{" "}
+                      <span className="text-[#58A6FF]">{selectedGMXTrades.size}</span> trades
                     </span>
                   ) : (
-                    <span>Select positions from LP and Perp columns</span>
+                    <span>Select positions or individual trades</span>
                   )}
                 </div>
 
                 {/* Selected Items Preview */}
-                {(selectedLPPositions.size > 0 || selectedGMXPositions.size > 0) && (
-                  <div className="space-y-2 mb-3">
+                {(selectedLPPositions.size > 0 || selectedGMXPositions.size > 0 || selectedGMXTrades.size > 0) && (
+                  <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
                     {/* Selected LP Positions */}
                     {Array.from(selectedLPPositions).map(posId => {
                       const pool = poolGroups.find(p => p.positions.some(pos => pos.position_id === posId));
@@ -944,6 +1013,28 @@ export default function TestPage() {
                         </div>
                       );
                     })}
+
+                    {/* Selected GMX Trades */}
+                    {Array.from(selectedGMXTrades).map(tradeKey => {
+                      const [posKey, txHash] = tradeKey.split(":");
+                      const pos = gmxPositions.find(p => p.position_key === posKey);
+                      const history = gmxHistories[posKey];
+                      const tx = history?.transactions.find(t => t.tx_hash === txHash);
+                      if (!pos || !tx) return null;
+                      return (
+                        <div key={tradeKey} className="flex items-center justify-between bg-[#0D1117] p-2 rounded text-xs">
+                          <span className="text-[#E6EDF3]">
+                            {pos.market_name} {tx.action} {formatDate(tx.timestamp)}
+                          </span>
+                          <button
+                            onClick={() => toggleGMXTradeSelection(posKey, txHash)}
+                            className="text-[#8B949E] hover:text-[#F85149]"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -958,7 +1049,7 @@ export default function TestPage() {
                   />
                   <button
                     onClick={createStrategy}
-                    disabled={!newStrategyName.trim() || (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0)}
+                    disabled={!newStrategyName.trim() || (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0 && selectedGMXTrades.size === 0)}
                     className="px-3 py-2 bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1"
                   >
                     <Plus className="w-4 h-4" />
@@ -986,11 +1077,12 @@ export default function TestPage() {
                       </div>
                       <div className="text-xs text-[#8B949E] mt-1">
                         {strategy.items.filter(i => i.type === "lp").length} LP +{" "}
-                        {strategy.items.filter(i => i.type === "gmx").length} Perp positions
+                        {strategy.items.filter(i => i.type === "gmx").length} Perp +{" "}
+                        {strategy.items.filter(i => i.type === "gmx_trade").length} trades
                       </div>
                     </div>
 
-                    <div className="p-3 space-y-2">
+                    <div className="p-3 space-y-2 max-h-48 overflow-y-auto">
                       {strategy.items.map((item, idx) => (
                         <div
                           key={idx}
@@ -1004,7 +1096,7 @@ export default function TestPage() {
                               </span>
                               <span className="text-[#8B949E]">#{item.position_id}</span>
                             </div>
-                          ) : (
+                          ) : item.type === "gmx" ? (
                             <div className="flex items-center gap-2">
                               <span className={`px-1.5 py-0.5 rounded ${
                                 item.side === "Short"
@@ -1014,6 +1106,14 @@ export default function TestPage() {
                                 {item.side}
                               </span>
                               <span className="text-[#E6EDF3]">{item.market_name}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="px-1.5 py-0.5 bg-[#A371F7]/20 text-[#A371F7] rounded">
+                                {item.action}
+                              </span>
+                              <span className="text-[#E6EDF3]">{item.market_name}</span>
+                              <span className="text-[#8B949E]">{formatDate(item.timestamp)}</span>
                             </div>
                           )}
                           <button
