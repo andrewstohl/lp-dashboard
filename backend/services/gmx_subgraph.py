@@ -28,11 +28,17 @@ TOKEN_INFO = {
     "0xfc5a1a6eb076a2c7ad06ed22c90d7e710e35ad0a": {"symbol": "GMX", "decimals": 18},
 }
 
-# Known market addresses
+# Known market addresses (cached from subgraph queries)
 MARKET_INFO = {
     "0x70d95587d40a2caf56bd97485ab3eec10bee6336": {"name": "ETH/USD", "index_token": "WETH"},
     "0x7f1fa204bb700853d36994da19f830b6ad18455c": {"name": "LINK/USD", "index_token": "LINK"},
     "0x47c031236e19d024b42f8ae6780e44a573170703": {"name": "BTC/USD", "index_token": "WBTC"},
+    "0x450bb6774dd8a756274e0ab4107953259d2ac541": {"name": "ETH/USD", "index_token": "WETH"},
+    "0x6853ea96ff216fab11d2d930ce3c508556a4bdc4": {"name": "DOGE/USD", "index_token": "DOGE"},
+    "0x09400d9db990d5ed3f35d7be61dfaeb900af03c9": {"name": "SOL/USD", "index_token": "SOL"},
+    "0x2b477989a149b17073d9c9c82ec9cb03591e20c6": {"name": "PEPE/USD", "index_token": "PEPE"},
+    "0x55391d178ce46e7ac8eaaea50a72d1a5a8a622da": {"name": "GMX/USD", "index_token": "GMX"},
+    "0x672fea44f4583ddad620d60c1ac31021f47558cb": {"name": "ARB/USD", "index_token": "ARB"},
 }
 
 
@@ -86,6 +92,405 @@ class GMXSubgraphService:
         """Get market name from address."""
         info = MARKET_INFO.get(address.lower(), {})
         return info.get("name", "Unknown")
+
+    async def get_all_positions(
+        self,
+        wallet_address: str,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """
+        Get ALL GMX V2 perpetual positions (both active and closed).
+
+        This mirrors the Uniswap get_positions_by_owner() pattern.
+        Groups by positionKey and returns summary for each position.
+
+        Returns:
+            List of position summaries with status, trades, P&L
+        """
+        wallet = wallet_address.lower()
+
+        # Query position increases
+        inc_query = """
+        {
+          positionIncreases(
+            where: {account: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: desc
+            first: %d
+          ) {
+            id
+            positionKey
+            marketAddress
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            isLong
+            transaction {
+              id
+              timestamp
+              blockNumber
+            }
+          }
+        }
+        """ % (wallet, limit)
+
+        # Query position decreases
+        dec_query = """
+        {
+          positionDecreases(
+            where: {account: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: desc
+            first: %d
+          ) {
+            id
+            positionKey
+            marketAddress
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            basePnlUsd
+            isLong
+            transaction {
+              id
+              timestamp
+              blockNumber
+            }
+          }
+        }
+        """ % (wallet, limit)
+
+        inc_data = await self._query(inc_query)
+        dec_data = await self._query(dec_query)
+
+        increases = inc_data.get("data", {}).get("positionIncreases", []) if inc_data else []
+        decreases = dec_data.get("data", {}).get("positionDecreases", []) if dec_data else []
+
+        logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for {wallet[:10]}...")
+
+        # Group by positionKey
+        positions_map: Dict[str, Dict] = {}
+
+        for inc in increases:
+            pos_key = inc.get("positionKey", "")
+            if not pos_key:
+                continue
+
+            if pos_key not in positions_map:
+                market_addr = inc.get("marketAddress", "").lower()
+                market_info = MARKET_INFO.get(market_addr, {})
+                positions_map[pos_key] = {
+                    "position_key": pos_key,
+                    "market_address": market_addr,
+                    "market_name": market_info.get("name", "Unknown"),
+                    "index_symbol": market_info.get("index_token", "?"),
+                    "is_long": inc.get("isLong", False),
+                    "side": "Long" if inc.get("isLong", False) else "Short",
+                    "increases": [],
+                    "decreases": [],
+                }
+
+            tx = inc.get("transaction", {})
+            positions_map[pos_key]["increases"].append({
+                "timestamp": self._safe_int(tx.get("timestamp", 0)),
+                "tx_hash": tx.get("id", ""),
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
+                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / 1e30,
+                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / 1e6,
+            })
+
+        for dec in decreases:
+            pos_key = dec.get("positionKey", "")
+            if not pos_key:
+                continue
+
+            if pos_key not in positions_map:
+                market_addr = dec.get("marketAddress", "").lower()
+                market_info = MARKET_INFO.get(market_addr, {})
+                positions_map[pos_key] = {
+                    "position_key": pos_key,
+                    "market_address": market_addr,
+                    "market_name": market_info.get("name", "Unknown"),
+                    "index_symbol": market_info.get("index_token", "?"),
+                    "is_long": dec.get("isLong", False),
+                    "side": "Long" if dec.get("isLong", False) else "Short",
+                    "increases": [],
+                    "decreases": [],
+                }
+
+            tx = dec.get("transaction", {})
+            positions_map[pos_key]["decreases"].append({
+                "timestamp": self._safe_int(tx.get("timestamp", 0)),
+                "tx_hash": tx.get("id", ""),
+                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_after_usd": self._safe_int(dec.get("sizeInUsd", 0)) / 1e30,
+                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / 1e30,
+                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / 1e6,
+                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / 1e30,
+            })
+
+        # Build position summaries
+        positions = []
+        for pos_key, pos_data in positions_map.items():
+            all_trades = pos_data["increases"] + pos_data["decreases"]
+
+            # Get timestamps
+            timestamps = [t["timestamp"] for t in all_trades if t.get("timestamp")]
+            first_timestamp = min(timestamps) if timestamps else 0
+            last_timestamp = max(timestamps) if timestamps else 0
+
+            # Get current size from the most recent event
+            all_sorted = sorted(all_trades, key=lambda x: x["timestamp"])
+            current_size = all_sorted[-1]["size_after_usd"] if all_sorted else 0
+
+            # Calculate total P&L from decreases
+            total_pnl = sum(d.get("pnl_usd", 0) for d in pos_data["decreases"])
+
+            # Calculate total size opened
+            total_size_opened = sum(i["size_delta_usd"] for i in pos_data["increases"])
+
+            positions.append({
+                "position_key": pos_key,
+                "market_address": pos_data["market_address"],
+                "market_name": pos_data["market_name"],
+                "index_symbol": pos_data["index_symbol"],
+                "side": pos_data["side"],
+                "is_long": pos_data["is_long"],
+                "status": "ACTIVE" if current_size > 0.01 else "CLOSED",
+                "current_size_usd": current_size,
+                "total_size_opened_usd": total_size_opened,
+                "total_trades": len(all_trades),
+                "increase_count": len(pos_data["increases"]),
+                "decrease_count": len(pos_data["decreases"]),
+                "total_pnl_usd": total_pnl,
+                "first_trade_timestamp": first_timestamp,
+                "last_trade_timestamp": last_timestamp,
+            })
+
+        # Sort by last activity
+        positions.sort(key=lambda x: x.get("last_trade_timestamp", 0), reverse=True)
+
+        return positions
+
+    async def get_position_history_by_key(
+        self,
+        position_key: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get complete trade history for a specific GMX position.
+
+        This mirrors the Uniswap get_position_history() pattern.
+
+        GMX Data Pipeline (self-contained - no DeBank needed):
+        - Structure: GMX Subgraph (positionKey groups trades)
+        - Amounts: GMX Subgraph (sizeDeltaUsd, collateralAmount)
+        - Prices: GMX Subgraph (executionPrice at trade time)
+        - Fees: GMX Subgraph (borrowingFee, fundingFee, positionFee)
+        - P&L: GMX Subgraph (basePnlUsd)
+
+        Returns:
+            Dict with position info and transactions list
+        """
+        # Query position increases
+        inc_query = """
+        {
+          positionIncreases(
+            where: {positionKey: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: asc
+            first: 100
+          ) {
+            id
+            positionKey
+            marketAddress
+            isLong
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            transaction {
+              id
+              timestamp
+              blockNumber
+            }
+          }
+        }
+        """ % position_key
+
+        # Query position decreases
+        dec_query = """
+        {
+          positionDecreases(
+            where: {positionKey: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: asc
+            first: 100
+          ) {
+            id
+            positionKey
+            marketAddress
+            isLong
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            basePnlUsd
+            priceImpactUsd
+            transaction {
+              id
+              timestamp
+              blockNumber
+            }
+          }
+        }
+        """ % position_key
+
+        # Query trade actions for fee data
+        actions_query = """
+        {
+          tradeActions(
+            where: {orderKey: "%s"}
+            orderBy: timestamp
+            orderDirection: asc
+            first: 100
+          ) {
+            id
+            eventName
+            borrowingFeeAmount
+            fundingFeeAmount
+            positionFeeAmount
+            pnlUsd
+            timestamp
+            transaction {
+              id
+            }
+          }
+        }
+        """ % position_key
+
+        inc_data = await self._query(inc_query)
+        dec_data = await self._query(dec_query)
+        actions_data = await self._query(actions_query)
+
+        increases = inc_data.get("data", {}).get("positionIncreases", []) if inc_data else []
+        decreases = dec_data.get("data", {}).get("positionDecreases", []) if dec_data else []
+        actions = actions_data.get("data", {}).get("tradeActions", []) if actions_data else []
+
+        if not increases and not decreases:
+            logger.warning(f"Position {position_key} not found")
+            return None
+
+        # Get market info from first trade
+        first_trade = increases[0] if increases else decreases[0]
+        market_addr = first_trade.get("marketAddress", "").lower()
+        market_info = MARKET_INFO.get(market_addr, {})
+        is_long = first_trade.get("isLong", False)
+
+        # Build fee lookup by tx_hash
+        fees_by_tx = {}
+        for action in actions:
+            tx_id = action.get("transaction", {}).get("id", "").lower()
+            if tx_id:
+                fees_by_tx[tx_id] = {
+                    "borrowing_fee": self._safe_int(action.get("borrowingFeeAmount", 0)) / 1e6,
+                    "funding_fee": self._safe_int(action.get("fundingFeeAmount", 0)) / 1e6,
+                    "position_fee": self._safe_int(action.get("positionFeeAmount", 0)) / 1e6,
+                }
+
+        # Build transactions list
+        transactions = []
+
+        # Process increases
+        is_first_increase = True
+        for inc in increases:
+            tx = inc.get("transaction", {})
+            tx_hash = tx.get("id", "").lower()
+            fees = fees_by_tx.get(tx_hash, {})
+
+            transactions.append({
+                "timestamp": self._safe_int(tx.get("timestamp", 0)),
+                "block_number": self._safe_int(tx.get("blockNumber", 0)),
+                "tx_hash": tx.get("id", ""),
+                "action": "Open" if is_first_increase else "Increase",
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
+                "collateral_usd": self._safe_int(inc.get("collateralAmount", 0)) / 1e6,
+                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / 1e30,
+                "pnl_usd": 0.0,
+                "borrowing_fee_usd": fees.get("borrowing_fee", 0),
+                "funding_fee_usd": fees.get("funding_fee", 0),
+                "position_fee_usd": fees.get("position_fee", 0),
+                "total_fees_usd": sum(fees.values()) if fees else 0,
+            })
+            is_first_increase = False
+
+        # Process decreases
+        for dec in decreases:
+            tx = dec.get("transaction", {})
+            tx_hash = tx.get("id", "").lower()
+            fees = fees_by_tx.get(tx_hash, {})
+            size_after = self._safe_int(dec.get("sizeInUsd", 0)) / 1e30
+
+            transactions.append({
+                "timestamp": self._safe_int(tx.get("timestamp", 0)),
+                "block_number": self._safe_int(tx.get("blockNumber", 0)),
+                "tx_hash": tx.get("id", ""),
+                "action": "Close" if size_after < 0.01 else "Decrease",
+                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_after_usd": size_after,
+                "collateral_usd": self._safe_int(dec.get("collateralAmount", 0)) / 1e6,
+                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / 1e30,
+                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / 1e30,
+                "price_impact_usd": self._safe_int(dec.get("priceImpactUsd", 0)) / 1e30,
+                "borrowing_fee_usd": fees.get("borrowing_fee", 0),
+                "funding_fee_usd": fees.get("funding_fee", 0),
+                "position_fee_usd": fees.get("position_fee", 0),
+                "total_fees_usd": sum(fees.values()) if fees else 0,
+            })
+
+        # Sort by timestamp
+        transactions.sort(key=lambda x: x["timestamp"])
+
+        # Calculate summary
+        total_size_opened = sum(tx["size_delta_usd"] for tx in transactions if tx["action"] in ("Open", "Increase"))
+        total_size_closed = sum(tx["size_delta_usd"] for tx in transactions if tx["action"] in ("Close", "Decrease"))
+        total_pnl = sum(tx["pnl_usd"] for tx in transactions)
+        total_fees = sum(tx["total_fees_usd"] for tx in transactions)
+
+        # Current status
+        current_size = transactions[-1]["size_after_usd"] if transactions else 0
+        status = "ACTIVE" if current_size > 0.01 else "CLOSED"
+
+        return {
+            "position_key": position_key,
+            "status": status,
+            "market": {
+                "address": market_addr,
+                "name": market_info.get("name", "Unknown"),
+                "index_symbol": market_info.get("index_token", "?"),
+            },
+            "side": "Long" if is_long else "Short",
+            "is_long": is_long,
+            "current_size_usd": current_size,
+            "transactions": transactions,
+            "summary": {
+                "total_transactions": len(transactions),
+                "total_size_opened_usd": total_size_opened,
+                "total_size_closed_usd": total_size_closed,
+                "total_pnl_usd": total_pnl,
+                "total_fees_usd": total_fees,
+                "net_pnl_usd": total_pnl - total_fees,
+            },
+            "data_sources": {
+                "structure": "gmx_subgraph",
+                "amounts": "gmx_subgraph",
+                "prices": "gmx_subgraph",
+                "fees": "gmx_subgraph",
+            }
+        }
 
     async def get_position_history(
         self,

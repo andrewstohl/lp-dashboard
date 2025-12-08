@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from backend.services.discovery import TransactionDiscoveryService
 from backend.services.thegraph import TheGraphService
+from backend.services.gmx_subgraph import GMXSubgraphService
 from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -333,6 +334,113 @@ async def get_position_history(
 
     except Exception as e:
         logger.error(f"Error getting position history: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+# ============================================================================
+# GMX V2 Perpetual Position Endpoints
+# ============================================================================
+
+@router.get("/gmx-positions")
+async def get_gmx_positions(
+    wallet: str = Query(..., description="Wallet address")
+) -> Dict[str, Any]:
+    """
+    Get ALL GMX V2 perpetual positions (active and closed) on Arbitrum.
+
+    GMX Data Pipeline (self-contained - no DeBank needed):
+    - Structure: GMX Subgraph (positionKey groups trades)
+    - Amounts: GMX Subgraph (sizeInUsd, sizeDeltaUsd, collateralAmount)
+    - Prices: GMX Subgraph (executionPrice at trade time)
+    - Fees: GMX Subgraph (borrowingFee, fundingFee, positionFee)
+    - P&L: GMX Subgraph (basePnlUsd)
+
+    Returns positions grouped by positionKey with summary stats.
+    """
+    try:
+        gmx = GMXSubgraphService()
+        positions = await gmx.get_all_positions(wallet)
+        await gmx.close()
+
+        # Count active vs closed
+        active = sum(1 for p in positions if p["status"] == "ACTIVE")
+        closed = sum(1 for p in positions if p["status"] == "CLOSED")
+
+        # Calculate totals
+        total_pnl = sum(p["total_pnl_usd"] for p in positions)
+        total_size = sum(p["current_size_usd"] for p in positions)
+
+        return {
+            "status": "success",
+            "data": {
+                "positions": positions,
+                "summary": {
+                    "total_positions": len(positions),
+                    "active_positions": active,
+                    "closed_positions": closed,
+                    "total_current_size_usd": total_size,
+                    "total_realized_pnl_usd": total_pnl,
+                },
+                "data_sources": {
+                    "structure": "GMX Synthetics Subgraph (Arbitrum)",
+                    "amounts": "GMX Subgraph (self-contained)",
+                    "prices": "GMX Subgraph (executionPrice)",
+                    "fees": "GMX Subgraph (borrowing/funding/position fees)",
+                }
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting GMX positions: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+@router.get("/gmx-position-history/{position_key:path}")
+async def get_gmx_position_history(
+    position_key: str
+) -> Dict[str, Any]:
+    """
+    Get complete trade history for a specific GMX position.
+
+    GMX Data Pipeline (self-contained):
+    - Structure: positionKey groups all trades
+    - Amounts: sizeDeltaUsd, collateralAmount
+    - Prices: executionPrice at trade time
+    - Fees: borrowingFeeAmount, fundingFeeAmount, positionFeeAmount
+    - P&L: basePnlUsd
+
+    Returns all opens, increases, decreases, and closes with:
+    - Transaction hash
+    - Timestamp
+    - Size changes
+    - Execution price
+    - P&L (for decreases)
+    - Fees paid
+    """
+    try:
+        gmx = GMXSubgraphService()
+        history = await gmx.get_position_history_by_key(position_key)
+        await gmx.close()
+
+        if not history:
+            return {
+                "status": "error",
+                "detail": {"error": f"Position {position_key} not found"}
+            }
+
+        return {
+            "status": "success",
+            "data": history
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting GMX position history: {e}", exc_info=True)
         return {
             "status": "error",
             "detail": {"error": str(e)}
