@@ -505,6 +505,9 @@ def _extract_lp_token_pair(tx: Dict, token_dict: Dict) -> str:
     """
     tokens = set()
     
+    # Build case-insensitive lookup for token_dict
+    token_dict_lower = {k.lower(): v for k, v in token_dict.items()}
+    
     for t in (tx.get("sends") or []) + (tx.get("receives") or []):
         amount = t.get("amount", 0)
         token_id = t.get("token_id", "")
@@ -516,10 +519,10 @@ def _extract_lp_token_pair(tx: Dict, token_dict: Dict) -> str:
         if not token_id:
             continue
             
-        # Get symbol from transaction data first, then token_dict
+        # Get symbol from transaction data first, then token_dict (case-insensitive)
         symbol = t.get("symbol") or ""
         if not symbol:
-            token_info = token_dict.get(token_id, {})
+            token_info = token_dict.get(token_id) or token_dict_lower.get(token_id.lower(), {})
             symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
         
         # Normalize ETH variants
@@ -527,9 +530,7 @@ def _extract_lp_token_pair(tx: Dict, token_dict: Dict) -> str:
             tokens.add("ETH")
         elif symbol:
             tokens.add(symbol.upper())
-        else:
-            # Use abbreviated address for unknown tokens
-            tokens.add(token_id[:10])
+        # Don't add truncated addresses - skip unknown tokens
     
     if len(tokens) >= 2:
         # Sort alphabetically, but put ETH last for readability (e.g., "LINK/ETH" not "ETH/LINK")

@@ -108,32 +108,50 @@ def infer_flow_direction(tx: Dict, token_dict: Dict) -> Tuple[str, float, float,
 
 
 def get_transaction_tokens(tx: Dict, token_dict: Dict) -> List[str]:
-    """Get list of token symbols involved in a transaction (excluding NFTs)."""
+    """
+    Get list of token symbols involved in a transaction (excluding NFTs).
+    
+    Lookup order:
+    1. Symbol from transaction data (set by _apply_prices_to_transaction in build.py)
+    2. Symbol from token_dict (case-insensitive lookup)
+    3. Skip unknown tokens (don't show truncated addresses)
+    """
     tokens = set()
+    
+    # Build case-insensitive lookup for token_dict
+    token_dict_lower = {k.lower(): v for k, v in token_dict.items()}
     
     for s in (tx.get("sends", []) or []):
         token_id = s.get("token_id", "")
         amount = s.get("amount", 0)
         if _is_nft_token(token_id, amount):
             continue
-        token_info = token_dict.get(token_id, {})
+        
+        # Case-insensitive token_dict lookup
+        token_info = token_dict.get(token_id) or token_dict_lower.get(token_id.lower(), {})
+        
+        # Priority: tx.symbol > token_dict.symbol > token_dict.optimized_symbol
         symbol = s.get("symbol") or token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        
         if symbol and not token_info.get("is_scam"):
             tokens.add(symbol.upper())
-        elif token_id and not symbol:
-            tokens.add(token_id[:10].upper())
+        # Don't add truncated addresses - just skip unknown tokens
     
     for r in (tx.get("receives", []) or []):
         token_id = r.get("token_id", "")
         amount = r.get("amount", 0)
         if _is_nft_token(token_id, amount):
             continue
-        token_info = token_dict.get(token_id, {})
+        
+        # Case-insensitive token_dict lookup
+        token_info = token_dict.get(token_id) or token_dict_lower.get(token_id.lower(), {})
+        
+        # Priority: tx.symbol > token_dict.symbol > token_dict.optimized_symbol
         symbol = r.get("symbol") or token_info.get("symbol") or token_info.get("optimized_symbol") or ""
+        
         if symbol and not token_info.get("is_scam"):
             tokens.add(symbol.upper())
-        elif token_id and not symbol:
-            tokens.add(token_id[:10].upper())
+        # Don't add truncated addresses - just skip unknown tokens
     
     return sorted(list(tokens))
 

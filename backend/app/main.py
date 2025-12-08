@@ -10,6 +10,7 @@ from backend.services.coingecko import close_coingecko_service
 from backend.app.api.v1 import wallet
 from backend.app.api.v1 import transactions
 from backend.app.api.v1 import build
+from backend.app.api.v1 import test
 
 # Setup logging
 setup_logging(settings.log_level)
@@ -44,6 +45,7 @@ app.add_middleware(
 app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 app.include_router(transactions.router, prefix="/api/v1", tags=["transactions"])
 app.include_router(build.router, prefix="/api/v1/build", tags=["build"])
+app.include_router(test.router, prefix="/api/v1", tags=["test"])
 
 @app.get("/")
 async def root():
