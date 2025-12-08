@@ -67,7 +67,7 @@ interface PoolGroup {
 }
 
 export default function TestPage() {
-  const [walletAddress, setWalletAddress] = useState("");
+  const [walletAddress, setWalletAddress] = useState("0x23b50a703d3076b73584df48251931ebf5937ba2");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [poolGroups, setPoolGroups] = useState<PoolGroup[]>([]);
