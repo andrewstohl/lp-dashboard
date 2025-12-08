@@ -276,45 +276,47 @@ async def get_subgraph_positions(
 @router.get("/position-history/{position_id}")
 async def get_position_history(
     position_id: str,
-    wallet: str = Query(None, description="Wallet address for DeBank fee enrichment")
+    wallet: str = Query(..., description="Wallet address (required for accurate amounts)")
 ) -> Dict[str, Any]:
     """
-    Get complete transaction history for a specific position with USD values.
+    Get complete transaction history for a specific position.
+
+    STANDARDIZED DATA PIPELINE:
+    - Structure: Subgraph (position info, snapshots, timestamps, blocks)
+    - Amounts: DeBank (ALL token amounts - deposits, withdraws, fees)
+    - Prices: Subgraph (historical prices at block level)
+    - Values: Computed (amount * price)
 
     Returns all deposits, withdrawals, and fee collections with:
     - Transaction hash
     - Timestamp
-    - Token amounts
-    - USD values at time of transaction
-
-    Uses DeBank data to get accurate fee collection amounts (subgraph has a bug).
-    Pass the wallet address to enable DeBank enrichment.
+    - Token amounts (from DeBank)
+    - USD values at time of transaction (from Subgraph prices)
     """
     try:
         thegraph = TheGraphService(settings.thegraph_api_key)
 
-        # If wallet provided, fetch DeBank transactions for accurate fee data
-        debank_txs = None
-        if wallet:
-            discovery = TransactionDiscoveryService()
-            since = datetime.now() - timedelta(days=365 * 3)  # 3 years of history
-            debank_result = await discovery.discover_transactions(
-                wallet_address=wallet,
-                since=since,
-                max_pages=100
-            )
+        # Fetch DeBank transactions for accurate token amounts
+        discovery = TransactionDiscoveryService()
+        since = datetime.now() - timedelta(days=365 * 3)  # 3 years of history
+        debank_result = await discovery.discover_transactions(
+            wallet_address=wallet,
+            since=since,
+            max_pages=100
+        )
 
-            # Build dict of tx_hash -> tx data for Uniswap transactions
-            debank_txs = {}
-            for tx in debank_result.get("transactions", []):
-                if "uniswap" in (tx.get("project_id") or "").lower():
-                    tx_hash = tx.get("id", "").lower()
-                    if tx_hash:
-                        debank_txs[tx_hash] = tx
+        # Build dict of tx_hash -> tx data for Uniswap transactions
+        debank_txs = {}
+        for tx in debank_result.get("transactions", []):
+            if "uniswap" in (tx.get("project_id") or "").lower():
+                tx_hash = tx.get("id", "").lower()
+                if tx_hash:
+                    debank_txs[tx_hash] = tx
 
-            logger.info(f"Loaded {len(debank_txs)} Uniswap transactions from DeBank for fee enrichment")
-            await discovery.close()
+        logger.info(f"Loaded {len(debank_txs)} Uniswap transactions from DeBank for amounts")
+        await discovery.close()
 
+        # Get position history with DeBank amounts + Subgraph prices
         history = await thegraph.get_position_history(position_id, debank_txs=debank_txs)
         await thegraph.close()
 

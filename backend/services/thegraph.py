@@ -129,19 +129,22 @@ class TheGraphService:
         """
         Get complete transaction history for a position with USD values.
 
-        Returns position info, pool details, and all transactions (deposits, collects, withdrawals)
-        with historical USD values calculated at the time of each transaction.
+        STANDARDIZED DATA PIPELINE:
+        - Stage 1 (Structure): Subgraph provides position info, snapshots (timestamps, blocks, tx hashes)
+        - Stage 2 (Amounts): DeBank provides ALL token amounts (deposits, withdraws, fees)
+        - Stage 3 (Prices): Subgraph provides historical prices at block level
+        - Stage 4 (Values): Computed as amount * price
 
         Args:
             position_id: The NFT position ID (e.g., "1128573")
-            debank_txs: Optional dict mapping tx_hash -> DeBank tx data for accurate fee amounts.
-                       The subgraph has a bug where fee amounts are incorrect, but DeBank
-                       has accurate amounts in the 'receives' field.
+            debank_txs: Dict mapping tx_hash -> DeBank tx data for token amounts.
+                       Required for accurate amounts. Without it, falls back to subgraph
+                       (which has bugs for fee data).
 
         Returns:
             Dict with position info, pool info, and transactions list
         """
-        # Step 1: Get position info and snapshots in one query
+        # STAGE 1: Get position structure from Subgraph
         query = """
         {
           position(id: "%s") {
@@ -164,12 +167,6 @@ class TheGraphService:
             }
             tickLower { tickIdx }
             tickUpper { tickIdx }
-            depositedToken0
-            depositedToken1
-            withdrawnToken0
-            withdrawnToken1
-            collectedFeesToken0
-            collectedFeesToken1
           }
           positionSnapshots(where: {position: "%s"}, orderBy: timestamp, orderDirection: asc, first: 1000) {
             id
@@ -199,8 +196,10 @@ class TheGraphService:
         pool = position.get("pool", {})
         token0 = pool.get("token0", {})
         token1 = pool.get("token1", {})
+        token0_addr = token0.get("id", "").lower()
+        token1_addr = token1.get("id", "").lower()
 
-        # Step 2: Process snapshots into transactions with deltas
+        # Process snapshots into transactions
         transactions = []
         prev_snapshot = None
 
@@ -208,85 +207,92 @@ class TheGraphService:
             block_number = int(snap.get("blockNumber", 0))
             timestamp = int(snap.get("timestamp", 0))
             tx_hash = snap.get("transaction", {}).get("id", "") if snap.get("transaction") else ""
-
-            # Current cumulative values
-            dep0 = float(snap.get("depositedToken0", 0))
-            dep1 = float(snap.get("depositedToken1", 0))
-            wit0 = float(snap.get("withdrawnToken0", 0))
-            wit1 = float(snap.get("withdrawnToken1", 0))
-            fee0 = float(snap.get("collectedFeesToken0", 0))
-            fee1 = float(snap.get("collectedFeesToken1", 0))
             liq = int(snap.get("liquidity", 0))
 
-            # Calculate deltas from previous snapshot
+            # Determine action type from subgraph deltas (structure only)
             if prev_snapshot:
                 prev_dep0 = float(prev_snapshot.get("depositedToken0", 0))
                 prev_dep1 = float(prev_snapshot.get("depositedToken1", 0))
                 prev_wit0 = float(prev_snapshot.get("withdrawnToken0", 0))
                 prev_wit1 = float(prev_snapshot.get("withdrawnToken1", 0))
                 prev_fee0 = float(prev_snapshot.get("collectedFeesToken0", 0))
-                prev_fee1 = float(prev_snapshot.get("collectedFeesToken1", 0))
                 prev_liq = int(prev_snapshot.get("liquidity", 0))
 
-                delta_dep0 = dep0 - prev_dep0
-                delta_dep1 = dep1 - prev_dep1
-                delta_wit0 = wit0 - prev_wit0
-                delta_wit1 = wit1 - prev_wit1
-                delta_fee0 = fee0 - prev_fee0
-                delta_fee1 = fee1 - prev_fee1
+                delta_dep0 = float(snap.get("depositedToken0", 0)) - prev_dep0
+                delta_dep1 = float(snap.get("depositedToken1", 0)) - prev_dep1
+                delta_wit0 = float(snap.get("withdrawnToken0", 0)) - prev_wit0
+                delta_wit1 = float(snap.get("withdrawnToken1", 0)) - prev_wit1
+                delta_fee0 = float(snap.get("collectedFeesToken0", 0)) - prev_fee0
 
                 # Determine action type
                 if delta_dep0 > 0.0001 or delta_dep1 > 0.0001:
                     action = "Deposit"
-                    amount0 = delta_dep0
-                    amount1 = delta_dep1
-                elif delta_fee0 > 0.0001 or delta_fee1 > 0.0001:
+                elif delta_fee0 > 0.0001:
                     action = "Collect"
-                    # Subgraph has a bug where collectedFeesToken0 == collectedFeesToken1
-                    # Use DeBank data if available for accurate fee amounts
-                    if debank_txs and tx_hash.lower() in debank_txs:
-                        debank_tx = debank_txs[tx_hash.lower()]
-                        receives = debank_tx.get("receives", [])
-                        token0_addr = token0.get("id", "").lower()
-                        token1_addr = token1.get("id", "").lower()
-                        amount0 = 0
-                        amount1 = 0
-                        for recv in receives:
-                            recv_token = recv.get("token_id", "").lower()
-                            if recv_token == token0_addr:
-                                amount0 = float(recv.get("amount", 0))
-                            elif recv_token == token1_addr:
-                                amount1 = float(recv.get("amount", 0))
-                        logger.debug(f"Using DeBank fee data: {amount0} {token0.get('symbol')}, {amount1} {token1.get('symbol')}")
-                    else:
-                        # Fallback: use subgraph data (token1 may be inaccurate)
-                        amount0 = delta_fee0
-                        amount1 = 0  # Set to 0 since subgraph fee data for token1 is unreliable
                 elif delta_wit0 > 0.0001 or delta_wit1 > 0.0001:
                     action = "Withdraw"
-                    amount0 = delta_wit0
-                    amount1 = delta_wit1
                 elif liq == 0 and prev_liq > 0:
                     action = "Burn"
-                    amount0 = delta_wit0
-                    amount1 = delta_wit1
                 else:
                     action = "Unknown"
-                    amount0 = 0
-                    amount1 = 0
             else:
                 # First snapshot is always a deposit (mint)
                 action = "Deposit"
-                amount0 = dep0
-                amount1 = dep1
 
-            # Step 3: Get historical prices at this block
+            # STAGE 2: Get amounts from DeBank (primary) or Subgraph (fallback)
+            amount0 = 0.0
+            amount1 = 0.0
+            amount_source = "subgraph"  # Default fallback
+
+            if debank_txs and tx_hash.lower() in debank_txs:
+                # USE DEBANK FOR ALL AMOUNTS (standardized approach)
+                debank_tx = debank_txs[tx_hash.lower()]
+                sends = debank_tx.get("sends", [])
+                receives = debank_tx.get("receives", [])
+                amount_source = "debank"
+
+                if action == "Deposit":
+                    # Deposits: user SENDS tokens to pool
+                    for send in sends:
+                        send_token = send.get("token_id", "").lower()
+                        if send_token == token0_addr:
+                            amount0 = float(send.get("amount", 0))
+                        elif send_token == token1_addr:
+                            amount1 = float(send.get("amount", 0))
+                elif action in ("Collect", "Withdraw", "Burn"):
+                    # Collects/Withdraws: user RECEIVES tokens from pool
+                    for recv in receives:
+                        recv_token = recv.get("token_id", "").lower()
+                        if recv_token == token0_addr:
+                            amount0 = float(recv.get("amount", 0))
+                        elif recv_token == token1_addr:
+                            amount1 = float(recv.get("amount", 0))
+            else:
+                # FALLBACK: Use subgraph amounts (less reliable for fees)
+                if prev_snapshot:
+                    if action == "Deposit":
+                        amount0 = delta_dep0
+                        amount1 = delta_dep1
+                    elif action == "Collect":
+                        # Subgraph fee data is buggy - only token0 is reliable
+                        amount0 = delta_fee0
+                        amount1 = 0  # Unreliable
+                    elif action in ("Withdraw", "Burn"):
+                        amount0 = delta_wit0
+                        amount1 = delta_wit1
+                else:
+                    # First snapshot
+                    amount0 = float(snap.get("depositedToken0", 0))
+                    amount1 = float(snap.get("depositedToken1", 0))
+
+            # STAGE 3: Get historical prices from Subgraph
             prices = await self._get_token_prices_at_block(
                 token0.get("id", ""),
                 token1.get("id", ""),
                 block_number
             )
 
+            # STAGE 4: Compute USD values
             if prices:
                 price0 = prices.get("token0_price", 0)
                 price1 = prices.get("token1_price", 0)
@@ -294,11 +300,7 @@ class TheGraphService:
                 value1 = amount1 * price1
                 total_value = value0 + value1
             else:
-                price0 = 0
-                price1 = 0
-                value0 = 0
-                value1 = 0
-                total_value = 0
+                price0 = price1 = value0 = value1 = total_value = 0
 
             transactions.append({
                 "timestamp": timestamp,
@@ -313,15 +315,20 @@ class TheGraphService:
                 "token1_price_usd": price1,
                 "token0_value_usd": value0,
                 "token1_value_usd": value1,
-                "total_value_usd": total_value
+                "total_value_usd": total_value,
+                "amount_source": amount_source
             })
 
             prev_snapshot = snap
 
-        # Step 4: Calculate summary totals
+        # Calculate summary totals
         total_deposited_usd = sum(tx["total_value_usd"] for tx in transactions if tx["action"] == "Deposit")
-        total_withdrawn_usd = sum(tx["total_value_usd"] for tx in transactions if tx["action"] == "Withdraw")
+        total_withdrawn_usd = sum(tx["total_value_usd"] for tx in transactions if tx["action"] in ("Withdraw", "Burn"))
         total_collected_usd = sum(tx["total_value_usd"] for tx in transactions if tx["action"] == "Collect")
+
+        # Count data sources
+        debank_count = sum(1 for tx in transactions if tx.get("amount_source") == "debank")
+        subgraph_count = len(transactions) - debank_count
 
         # Current position status
         current_liquidity = int(position.get("liquidity", 0))
@@ -350,9 +357,13 @@ class TheGraphService:
                 "total_deposited_usd": total_deposited_usd,
                 "total_withdrawn_usd": total_withdrawn_usd,
                 "total_fees_collected_usd": total_collected_usd,
-                "net_invested_usd": total_deposited_usd - total_withdrawn_usd,
-                "fee_data_source": "debank" if debank_txs else "subgraph",
-                "fee_data_note": None if debank_txs else "Fee collection amounts for token1 are unreliable due to subgraph indexing limitation"
+                "net_invested_usd": total_deposited_usd - total_withdrawn_usd
+            },
+            "data_sources": {
+                "structure": "subgraph",
+                "amounts": "debank" if debank_count == len(transactions) else f"debank ({debank_count}), subgraph ({subgraph_count})",
+                "prices": "subgraph",
+                "debank_coverage": f"{debank_count}/{len(transactions)} transactions"
             }
         }
 

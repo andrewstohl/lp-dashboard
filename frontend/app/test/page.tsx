@@ -20,6 +20,7 @@ interface Transaction {
   token0_value_usd: number;
   token1_value_usd: number;
   total_value_usd: number;
+  amount_source: string;
 }
 
 interface PositionHistory {
@@ -38,7 +39,12 @@ interface PositionHistory {
     total_withdrawn_usd: number;
     total_fees_collected_usd: number;
     net_invested_usd: number;
-    fee_data_note?: string;
+  };
+  data_sources: {
+    structure: string;
+    amounts: string;
+    prices: string;
+    debank_coverage: string;
   };
 }
 
@@ -411,12 +417,28 @@ export default function TestPage() {
                               </table>
                             </div>
 
-                            {/* Fee Data Note */}
-                            {history.summary.fee_data_note && (
-                              <div className="mt-3 text-xs text-[#8B949E] italic">
-                                Note: {history.summary.fee_data_note}
+                            {/* Data Pipeline Info */}
+                            <div className="mt-4 p-3 bg-[#161B22] rounded-lg border border-[#30363D]">
+                              <div className="text-xs font-medium text-[#8B949E] mb-2">Data Pipeline</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="flex justify-between">
+                                  <span className="text-[#8B949E]">Structure:</span>
+                                  <span className="text-[#58A6FF]">{history.data_sources?.structure || 'subgraph'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-[#8B949E]">Amounts:</span>
+                                  <span className="text-[#3FB950]">{history.data_sources?.amounts || 'debank'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-[#8B949E]">Prices:</span>
+                                  <span className="text-[#58A6FF]">{history.data_sources?.prices || 'subgraph'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-[#8B949E]">Coverage:</span>
+                                  <span className="text-[#E6EDF3]">{history.data_sources?.debank_coverage || 'N/A'}</span>
+                                </div>
                               </div>
-                            )}
+                            </div>
                           </div>
                         )}
                       </div>
