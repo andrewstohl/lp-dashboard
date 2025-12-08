@@ -121,7 +121,11 @@ class TheGraphService:
         logger.info(f"Found {len(positions)} positions for {owner_address[:10]}...")
         return positions
 
-    async def get_position_history(self, position_id: str) -> Optional[Dict[str, Any]]:
+    async def get_position_history(
+        self,
+        position_id: str,
+        debank_txs: Optional[Dict[str, Dict]] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Get complete transaction history for a position with USD values.
 
@@ -130,6 +134,9 @@ class TheGraphService:
 
         Args:
             position_id: The NFT position ID (e.g., "1128573")
+            debank_txs: Optional dict mapping tx_hash -> DeBank tx data for accurate fee amounts.
+                       The subgraph has a bug where fee amounts are incorrect, but DeBank
+                       has accurate amounts in the 'receives' field.
 
         Returns:
             Dict with position info, pool info, and transactions list
@@ -235,10 +242,26 @@ class TheGraphService:
                     amount1 = delta_dep1
                 elif delta_fee0 > 0.0001 or delta_fee1 > 0.0001:
                     action = "Collect"
-                    # NOTE: Subgraph has a bug where collectedFeesToken0 == collectedFeesToken1
-                    # We only use token0 fees as they appear accurate, token1 fees are unreliable
-                    amount0 = delta_fee0
-                    amount1 = 0  # Set to 0 since subgraph fee data for token1 is unreliable
+                    # Subgraph has a bug where collectedFeesToken0 == collectedFeesToken1
+                    # Use DeBank data if available for accurate fee amounts
+                    if debank_txs and tx_hash.lower() in debank_txs:
+                        debank_tx = debank_txs[tx_hash.lower()]
+                        receives = debank_tx.get("receives", [])
+                        token0_addr = token0.get("id", "").lower()
+                        token1_addr = token1.get("id", "").lower()
+                        amount0 = 0
+                        amount1 = 0
+                        for recv in receives:
+                            recv_token = recv.get("token_id", "").lower()
+                            if recv_token == token0_addr:
+                                amount0 = float(recv.get("amount", 0))
+                            elif recv_token == token1_addr:
+                                amount1 = float(recv.get("amount", 0))
+                        logger.debug(f"Using DeBank fee data: {amount0} {token0.get('symbol')}, {amount1} {token1.get('symbol')}")
+                    else:
+                        # Fallback: use subgraph data (token1 may be inaccurate)
+                        amount0 = delta_fee0
+                        amount1 = 0  # Set to 0 since subgraph fee data for token1 is unreliable
                 elif delta_wit0 > 0.0001 or delta_wit1 > 0.0001:
                     action = "Withdraw"
                     amount0 = delta_wit0
@@ -328,7 +351,8 @@ class TheGraphService:
                 "total_withdrawn_usd": total_withdrawn_usd,
                 "total_fees_collected_usd": total_collected_usd,
                 "net_invested_usd": total_deposited_usd - total_withdrawn_usd,
-                "fee_data_note": "Fee collection amounts for token1 are unreliable due to subgraph indexing limitation"
+                "fee_data_source": "debank" if debank_txs else "subgraph",
+                "fee_data_note": None if debank_txs else "Fee collection amounts for token1 are unreliable due to subgraph indexing limitation"
             }
         }
 
