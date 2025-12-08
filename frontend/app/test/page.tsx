@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Wallet, Loader2, ChevronDown, ChevronRight, ExternalLink, TrendingUp, TrendingDown } from "lucide-react";
+import { Wallet, Loader2, ChevronDown, ChevronRight, ExternalLink, TrendingUp, TrendingDown, Plus, X, Layers, CheckSquare, Square } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8004";
@@ -128,6 +128,35 @@ interface GMXPosition {
   last_trade_timestamp: number;
 }
 
+// Strategy Types
+interface StrategyLPItem {
+  type: "lp";
+  position_id: string;
+  pool_address: string;
+  token0_symbol: string;
+  token1_symbol: string;
+  fee_tier: string;
+  status: string;
+}
+
+interface StrategyGMXItem {
+  type: "gmx";
+  position_key: string;
+  market_name: string;
+  side: string;
+  status: string;
+  current_size_usd: number;
+}
+
+type StrategyItem = StrategyLPItem | StrategyGMXItem;
+
+interface Strategy {
+  id: string;
+  name: string;
+  items: StrategyItem[];
+  created_at: number;
+}
+
 export default function TestPage() {
   const [walletAddress, setWalletAddress] = useState("0x23b50a703d3076b73584df48251931ebf5937ba2");
   const [loading, setLoading] = useState(false);
@@ -145,6 +174,12 @@ export default function TestPage() {
   const [gmxHistories, setGMXHistories] = useState<Record<string, GMXPositionHistory>>({});
   const [loadingGMXPositions, setLoadingGMXPositions] = useState<Set<string>>(new Set());
 
+  // Strategy State
+  const [selectedLPPositions, setSelectedLPPositions] = useState<Set<string>>(new Set());
+  const [selectedGMXPositions, setSelectedGMXPositions] = useState<Set<string>>(new Set());
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [newStrategyName, setNewStrategyName] = useState("");
+
   const handleLoad = async () => {
     if (!walletAddress) return;
 
@@ -156,6 +191,8 @@ export default function TestPage() {
     setExpandedGMXPositions(new Set());
     setLPHistories({});
     setGMXHistories({});
+    setSelectedLPPositions(new Set());
+    setSelectedGMXPositions(new Set());
 
     try {
       // Fetch LP and GMX positions in parallel
@@ -312,6 +349,90 @@ export default function TestPage() {
     }
   };
 
+  // Strategy helpers
+  const toggleLPSelection = (positionId: string) => {
+    const newSelected = new Set(selectedLPPositions);
+    if (newSelected.has(positionId)) {
+      newSelected.delete(positionId);
+    } else {
+      newSelected.add(positionId);
+    }
+    setSelectedLPPositions(newSelected);
+  };
+
+  const toggleGMXSelection = (positionKey: string) => {
+    const newSelected = new Set(selectedGMXPositions);
+    if (newSelected.has(positionKey)) {
+      newSelected.delete(positionKey);
+    } else {
+      newSelected.add(positionKey);
+    }
+    setSelectedGMXPositions(newSelected);
+  };
+
+  const createStrategy = () => {
+    if (!newStrategyName.trim()) return;
+    if (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0) return;
+
+    const items: StrategyItem[] = [];
+
+    // Add selected LP positions
+    for (const pool of poolGroups) {
+      for (const pos of pool.positions) {
+        if (selectedLPPositions.has(pos.position_id)) {
+          items.push({
+            type: "lp",
+            position_id: pos.position_id,
+            pool_address: pool.pool_address,
+            token0_symbol: pool.token0_symbol,
+            token1_symbol: pool.token1_symbol,
+            fee_tier: pool.fee_tier,
+            status: pos.status,
+          });
+        }
+      }
+    }
+
+    // Add selected GMX positions
+    for (const pos of gmxPositions) {
+      if (selectedGMXPositions.has(pos.position_key)) {
+        items.push({
+          type: "gmx",
+          position_key: pos.position_key,
+          market_name: pos.market_name,
+          side: pos.side,
+          status: pos.status,
+          current_size_usd: pos.current_size_usd,
+        });
+      }
+    }
+
+    const newStrategy: Strategy = {
+      id: `strategy-${Date.now()}`,
+      name: newStrategyName.trim(),
+      items,
+      created_at: Date.now(),
+    };
+
+    setStrategies(prev => [...prev, newStrategy]);
+    setNewStrategyName("");
+    setSelectedLPPositions(new Set());
+    setSelectedGMXPositions(new Set());
+  };
+
+  const removeStrategy = (strategyId: string) => {
+    setStrategies(prev => prev.filter(s => s.id !== strategyId));
+  };
+
+  const removeItemFromStrategy = (strategyId: string, itemIndex: number) => {
+    setStrategies(prev => prev.map(s => {
+      if (s.id !== strategyId) return s;
+      const newItems = [...s.items];
+      newItems.splice(itemIndex, 1);
+      return { ...s, items: newItems };
+    }));
+  };
+
   // Stats
   const totalLPPositions = poolGroups.reduce((sum, pool) => sum + pool.positions.length, 0);
   const activeLPPositions = poolGroups.reduce(
@@ -377,9 +498,9 @@ export default function TestPage() {
           </div>
         )}
 
-        {/* Two Column Layout */}
+        {/* Three Column Layout */}
         {(poolGroups.length > 0 || gmxPositions.length > 0) && (
-          <div className="grid grid-cols-2 gap-6">
+          <div className="grid grid-cols-3 gap-6">
             {/* LEFT COLUMN: LP Positions */}
             <div>
               <div className="flex items-center gap-3 mb-4">
@@ -422,40 +543,57 @@ export default function TestPage() {
                         const isLoading = loadingLPPositions.has(position.position_id);
                         const history = lpHistories[position.position_id];
 
+                        const isSelected = selectedLPPositions.has(position.position_id);
+
                         return (
                           <div key={position.position_id}>
-                            <button
-                              onClick={() => toggleLPPosition(position.position_id)}
-                              className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
-                            >
+                            <div className="w-full px-4 py-3 flex items-center justify-between hover:bg-[#1C2128] transition-colors">
                               <div className="flex items-center gap-3">
-                                {isExpanded ? (
-                                  <ChevronDown className="w-4 h-4 text-[#8B949E]" />
-                                ) : (
-                                  <ChevronRight className="w-4 h-4 text-[#8B949E]" />
-                                )}
-                                <div className="text-left">
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-[#E6EDF3] font-medium text-sm">
-                                      #{position.position_id}
-                                    </span>
-                                    <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                      position.status === "ACTIVE"
-                                        ? "bg-[#238636]/20 text-[#3FB950]"
-                                        : "bg-[#21262D] text-[#8B949E]"
-                                    }`}>
-                                      {position.status}
-                                    </span>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleLPSelection(position.position_id);
+                                  }}
+                                  className="flex-shrink-0"
+                                >
+                                  {isSelected ? (
+                                    <CheckSquare className="w-4 h-4 text-[#58A6FF]" />
+                                  ) : (
+                                    <Square className="w-4 h-4 text-[#8B949E] hover:text-[#58A6FF]" />
+                                  )}
+                                </button>
+                                <button
+                                  onClick={() => toggleLPPosition(position.position_id)}
+                                  className="flex items-center gap-3 flex-1"
+                                >
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-4 h-4 text-[#8B949E]" />
+                                  ) : (
+                                    <ChevronRight className="w-4 h-4 text-[#8B949E]" />
+                                  )}
+                                  <div className="text-left">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-[#E6EDF3] font-medium text-sm">
+                                        #{position.position_id}
+                                      </span>
+                                      <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                        position.status === "ACTIVE"
+                                          ? "bg-[#238636]/20 text-[#3FB950]"
+                                          : "bg-[#21262D] text-[#8B949E]"
+                                      }`}>
+                                        {position.status}
+                                      </span>
+                                    </div>
+                                    <div className="text-xs text-[#8B949E]">
+                                      {formatDate(position.mint_timestamp)}
+                                    </div>
                                   </div>
-                                  <div className="text-xs text-[#8B949E]">
-                                    {formatDate(position.mint_timestamp)}
-                                  </div>
-                                </div>
+                                </button>
                               </div>
                               {isLoading && (
                                 <Loader2 className="w-4 h-4 animate-spin text-[#58A6FF]" />
                               )}
-                            </button>
+                            </div>
 
                             {/* Expanded LP History */}
                             {isExpanded && history && (
@@ -562,6 +700,7 @@ export default function TestPage() {
                   const isExpanded = expandedGMXPositions.has(position.position_key);
                   const isLoading = loadingGMXPositions.has(position.position_key);
                   const history = gmxHistories[position.position_key];
+                  const isSelected = selectedGMXPositions.has(position.position_key);
 
                   return (
                     <div
@@ -569,56 +708,71 @@ export default function TestPage() {
                       className="bg-[#161B22] rounded-xl border border-[#30363D] overflow-hidden"
                     >
                       {/* Position Header - Clickable */}
-                      <button
-                        onClick={() => toggleGMXPosition(position.position_key)}
-                        className="w-full p-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
-                      >
+                      <div className="w-full p-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors">
                         <div className="flex items-center gap-3">
-                          {isExpanded ? (
-                            <ChevronDown className="w-4 h-4 text-[#8B949E]" />
-                          ) : (
-                            <ChevronRight className="w-4 h-4 text-[#8B949E]" />
-                          )}
-                          <div className="text-left">
-                            <div className="flex items-center gap-2">
-                              <span className="text-lg font-bold text-[#E6EDF3]">
-                                {position.market_name}
-                              </span>
-                              <span className={`text-sm px-2 py-0.5 rounded ${
-                                position.side === "Short"
-                                  ? "bg-[#F85149]/20 text-[#F85149]"
-                                  : "bg-[#3FB950]/20 text-[#3FB950]"
-                              }`}>
-                                {position.side === "Short" ? (
-                                  <TrendingDown className="w-3 h-3 inline mr-1" />
-                                ) : (
-                                  <TrendingUp className="w-3 h-3 inline mr-1" />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleGMXSelection(position.position_key);
+                            }}
+                            className="flex-shrink-0"
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="w-4 h-4 text-[#58A6FF]" />
+                            ) : (
+                              <Square className="w-4 h-4 text-[#8B949E] hover:text-[#58A6FF]" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => toggleGMXPosition(position.position_key)}
+                            className="flex items-center gap-3 flex-1"
+                          >
+                            {isExpanded ? (
+                              <ChevronDown className="w-4 h-4 text-[#8B949E]" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4 text-[#8B949E]" />
+                            )}
+                            <div className="text-left">
+                              <div className="flex items-center gap-2">
+                                <span className="text-lg font-bold text-[#E6EDF3]">
+                                  {position.market_name}
+                                </span>
+                                <span className={`text-sm px-2 py-0.5 rounded ${
+                                  position.side === "Short"
+                                    ? "bg-[#F85149]/20 text-[#F85149]"
+                                    : "bg-[#3FB950]/20 text-[#3FB950]"
+                                }`}>
+                                  {position.side === "Short" ? (
+                                    <TrendingDown className="w-3 h-3 inline mr-1" />
+                                  ) : (
+                                    <TrendingUp className="w-3 h-3 inline mr-1" />
+                                  )}
+                                  {position.side}
+                                </span>
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                  position.status === "ACTIVE"
+                                    ? "bg-[#238636]/20 text-[#3FB950]"
+                                    : "bg-[#21262D] text-[#8B949E]"
+                                }`}>
+                                  {position.status}
+                                </span>
+                              </div>
+                              <div className="flex gap-3 text-xs text-[#8B949E] mt-1">
+                                <span>{position.total_trades} trades</span>
+                                <span className={position.total_pnl_usd >= 0 ? "text-[#3FB950]" : "text-[#F85149]"}>
+                                  {position.total_pnl_usd >= 0 ? "+" : ""}{formatUSD(position.total_pnl_usd)} P&L
+                                </span>
+                                {position.status === "ACTIVE" && (
+                                  <span>Size: {formatUSD(position.current_size_usd)}</span>
                                 )}
-                                {position.side}
-                              </span>
-                              <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                position.status === "ACTIVE"
-                                  ? "bg-[#238636]/20 text-[#3FB950]"
-                                  : "bg-[#21262D] text-[#8B949E]"
-                              }`}>
-                                {position.status}
-                              </span>
+                              </div>
                             </div>
-                            <div className="flex gap-3 text-xs text-[#8B949E] mt-1">
-                              <span>{position.total_trades} trades</span>
-                              <span className={position.total_pnl_usd >= 0 ? "text-[#3FB950]" : "text-[#F85149]"}>
-                                {position.total_pnl_usd >= 0 ? "+" : ""}{formatUSD(position.total_pnl_usd)} P&L
-                              </span>
-                              {position.status === "ACTIVE" && (
-                                <span>Size: {formatUSD(position.current_size_usd)}</span>
-                              )}
-                            </div>
-                          </div>
+                          </button>
                         </div>
                         {isLoading && (
                           <Loader2 className="w-4 h-4 animate-spin text-[#58A6FF]" />
                         )}
-                      </button>
+                      </div>
 
                       {/* Expanded GMX History */}
                       {isExpanded && history && (
@@ -720,6 +874,181 @@ export default function TestPage() {
                   <p className="text-[#8B949E]">No GMX positions found</p>
                 </div>
               )}
+            </div>
+
+            {/* RIGHT COLUMN: Strategies */}
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <h2 className="text-xl font-bold text-[#E6EDF3]">Strategies</h2>
+                <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                  {strategies.length} Saved
+                </span>
+              </div>
+
+              {/* Strategy Builder */}
+              <div className="bg-[#161B22] rounded-xl border border-[#30363D] p-4 mb-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Layers className="w-4 h-4 text-[#58A6FF]" />
+                  <h3 className="text-sm font-medium text-[#E6EDF3]">Build Strategy</h3>
+                </div>
+
+                {/* Selected Items Count */}
+                <div className="text-xs text-[#8B949E] mb-3">
+                  {selectedLPPositions.size + selectedGMXPositions.size > 0 ? (
+                    <span>
+                      <span className="text-[#58A6FF]">{selectedLPPositions.size}</span> LP +{" "}
+                      <span className="text-[#58A6FF]">{selectedGMXPositions.size}</span> Perp selected
+                    </span>
+                  ) : (
+                    <span>Select positions from LP and Perp columns</span>
+                  )}
+                </div>
+
+                {/* Selected Items Preview */}
+                {(selectedLPPositions.size > 0 || selectedGMXPositions.size > 0) && (
+                  <div className="space-y-2 mb-3">
+                    {/* Selected LP Positions */}
+                    {Array.from(selectedLPPositions).map(posId => {
+                      const pool = poolGroups.find(p => p.positions.some(pos => pos.position_id === posId));
+                      if (!pool) return null;
+                      return (
+                        <div key={posId} className="flex items-center justify-between bg-[#0D1117] p-2 rounded text-xs">
+                          <span className="text-[#E6EDF3]">
+                            {pool.token0_symbol}/{pool.token1_symbol} #{posId}
+                          </span>
+                          <button
+                            onClick={() => toggleLPSelection(posId)}
+                            className="text-[#8B949E] hover:text-[#F85149]"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+
+                    {/* Selected GMX Positions */}
+                    {Array.from(selectedGMXPositions).map(posKey => {
+                      const pos = gmxPositions.find(p => p.position_key === posKey);
+                      if (!pos) return null;
+                      return (
+                        <div key={posKey} className="flex items-center justify-between bg-[#0D1117] p-2 rounded text-xs">
+                          <span className="text-[#E6EDF3]">
+                            {pos.market_name} {pos.side}
+                          </span>
+                          <button
+                            onClick={() => toggleGMXSelection(posKey)}
+                            className="text-[#8B949E] hover:text-[#F85149]"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Strategy Name Input */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newStrategyName}
+                    onChange={(e) => setNewStrategyName(e.target.value)}
+                    placeholder="Strategy name..."
+                    className="flex-1 px-3 py-2 bg-[#0D1117] border border-[#30363D] rounded-lg text-sm text-[#E6EDF3] placeholder-[#8B949E] focus:outline-none focus:ring-2 focus:ring-[#58A6FF]"
+                  />
+                  <button
+                    onClick={createStrategy}
+                    disabled={!newStrategyName.trim() || (selectedLPPositions.size === 0 && selectedGMXPositions.size === 0)}
+                    className="px-3 py-2 bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Create
+                  </button>
+                </div>
+              </div>
+
+              {/* Saved Strategies */}
+              <div className="space-y-3">
+                {strategies.map((strategy) => (
+                  <div
+                    key={strategy.id}
+                    className="bg-[#161B22] rounded-xl border border-[#30363D] overflow-hidden"
+                  >
+                    <div className="p-4 border-b border-[#21262D]">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-bold text-[#E6EDF3]">{strategy.name}</h3>
+                        <button
+                          onClick={() => removeStrategy(strategy.id)}
+                          className="text-[#8B949E] hover:text-[#F85149]"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="text-xs text-[#8B949E] mt-1">
+                        {strategy.items.filter(i => i.type === "lp").length} LP +{" "}
+                        {strategy.items.filter(i => i.type === "gmx").length} Perp positions
+                      </div>
+                    </div>
+
+                    <div className="p-3 space-y-2">
+                      {strategy.items.map((item, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between bg-[#0D1117] p-2 rounded text-xs"
+                        >
+                          {item.type === "lp" ? (
+                            <div className="flex items-center gap-2">
+                              <span className="px-1.5 py-0.5 bg-[#58A6FF]/20 text-[#58A6FF] rounded">LP</span>
+                              <span className="text-[#E6EDF3]">
+                                {item.token0_symbol}/{item.token1_symbol}
+                              </span>
+                              <span className="text-[#8B949E]">#{item.position_id}</span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className={`px-1.5 py-0.5 rounded ${
+                                item.side === "Short"
+                                  ? "bg-[#F85149]/20 text-[#F85149]"
+                                  : "bg-[#3FB950]/20 text-[#3FB950]"
+                              }`}>
+                                {item.side}
+                              </span>
+                              <span className="text-[#E6EDF3]">{item.market_name}</span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeItemFromStrategy(strategy.id, idx)}
+                            className="text-[#8B949E] hover:text-[#F85149]"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="p-3 border-t border-[#21262D]">
+                      <button
+                        className="w-full px-4 py-2 bg-[#58A6FF] hover:bg-[#79B8FF] text-white text-sm font-medium rounded-lg transition-colors"
+                        onClick={() => {
+                          // TODO: Navigate to ledger with strategy data
+                          console.log("Analyze strategy:", strategy);
+                        }}
+                      >
+                        Analyze Strategy
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {strategies.length === 0 && (
+                  <div className="bg-[#161B22] rounded-xl border border-[#30363D] p-8 text-center">
+                    <Layers className="w-8 h-8 text-[#8B949E] mx-auto mb-3" />
+                    <p className="text-[#8B949E] text-sm">
+                      No strategies yet. Select LP and Perp positions to create a hedged strategy.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
