@@ -1,2034 +1,981 @@
 """
-Build Page API endpoints.
-
-Provides filtered and enriched transaction data specifically for the 
-Build page's three-column workflow (Transactions → Positions → Strategies).
-
-Key features:
-- Smart transaction filtering (hide noise, show position-relevant txs)
-- Transaction categorization (primary vs bundled)
-- Price enrichment on-demand
-- Position building from protocol data
+Build endpoint - Strategy Builder API
+Combines Uniswap V3 Subgraph (primary) with DeBank (secondary) for complete coverage.
 """
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
+from fastapi import APIRouter, Query
+from pydantic import BaseModel
+from typing import Any, Optional
 import logging
+import asyncio
+from datetime import datetime, timedelta
 
-from backend.services.discovery import get_discovery_service, DEFAULT_CHAIN_NAMES
-from backend.services.transaction_cache import get_cache
-from backend.services.coingecko_prices import get_price_service
+from backend.services.discovery import TransactionDiscoveryService
+from backend.services.thegraph import TheGraphService
+from backend.services.gmx_subgraph import GMXSubgraphService
 from backend.services.debank import get_debank_service
-# NOTE: position_lifecycle import removed - old auto-matching system deprecated
-from backend.app.api.v1.transaction_grouping import group_transactions, infer_flow_direction
+from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
 
-# Transaction categories for filtering
-NOISE_CATEGORIES = {"deploy", "approve"}  # Usually not position-relevant alone
-SPAM_INDICATORS = ["claim-", "Visit ", "airdrop", ".org", ".com", ".io"]
+router = APIRouter(prefix="/build", tags=["build"])
 
-# Bridge project IDs that should be hidden (not positions)
-BRIDGE_PROJECTS = {
-    "arb_across", "across", "mayan", "arb_socket", "socket", 
-    "base_socket", "op_socket", "bsc_socket", "eth_socket",
-    "stargate", "hop", "multichain", "synapse", "celer",
-    "layerzero", "wormhole", "axelar", "debridge",
-    "0x", "arb_0x", "base_0x", "op_0x", "eth_0x", "bsc_0x"  # 0x aggregator = swaps
+CHAIN_NAMES = {
+    "eth": "Ethereum",
+    "arb": "Arbitrum",
+    "op": "Optimism",
+    "base": "Base",
+    "matic": "Polygon",
+    "bsc": "BNB Chain",
 }
 
-# Bridge/swap transaction names that should be hidden
-BRIDGE_SWAP_KEYWORDS = [
-    "fillRelay", "fulfillWithERC20", "performFulfilment", 
-    "performExtraction", "refundRequest", "bridge", "relay",
-    "swap", "exchange", "fill", "createRequest"
-]
 
-def _is_spam_transaction(tx: Dict, token_dict: Dict) -> bool:
-    """
-    Detect spam/scam transactions that should be hidden.
-    
-    Checks:
-    - Token is_scam flag from DeBank
-    - Token name contains spam indicators
-    - Dust amounts (< $0.10 value)
-    """
-    # Check receives for spam tokens
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        token_info = token_dict.get(token_id, {})
-        
-        # DeBank marks known scams
-        if token_info.get("is_scam"):
-            return True
-        
-        # Check name for spam indicators
-        token_name = token_info.get("name", "") or ""
-        for indicator in SPAM_INDICATORS:
-            if indicator.lower() in token_name.lower():
-                return True
-    
-    return False
+def _format_position_from_subgraph(position: dict) -> dict:
+    """Format a subgraph position into our standard format."""
+    pool = position.get("pool", {})
+    token0 = pool.get("token0", {})
+    token1 = pool.get("token1", {})
+    tx = position.get("transaction", {})
 
+    liquidity = int(position.get("liquidity", 0))
+    fee_tier = int(pool.get("feeTier", 0)) / 10000
 
-def _is_bridge_or_swap(tx: Dict) -> bool:
-    """
-    Detect bridge and swap transactions that should be hidden per MVT rules.
-    
-    These don't create positions - they just move funds between chains/tokens.
-    """
-    project_id = (tx.get("project_id") or "").lower()
-    tx_name = (tx.get("tx", {}).get("name") or "").lower()
-    
-    # Check if project is a known bridge
-    if project_id in BRIDGE_PROJECTS:
-        return True
-    
-    # Check for bridge/swap keywords in transaction name
-    for keyword in BRIDGE_SWAP_KEYWORDS:
-        if keyword.lower() in tx_name:
-            return True
-    
-    # Check for 0x (aggregator/swap)
-    if project_id == "0x":
-        return True
-    
-    return False
-
-
-def _is_failed_transaction(tx: Dict) -> bool:
-    """
-    Detect failed transactions that should be hidden.
-    """
-    # DeBank marks failed transactions
-    tx_info = tx.get("tx", {})
-    if tx_info.get("status") == 0:
-        return True
-    
-    # Check for error/revert indicators
-    if tx_info.get("name", "").lower() in ["revert", "failed", "error"]:
-        return True
-    
-    return False
-
-
-def _is_dust_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 0.10) -> bool:
-    """
-    Detect dust transactions (total value < threshold).
-    Uses price_usd from token if available (historical), otherwise falls back to token_dict.
-    """
-    total_value = 0.0
-    
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        total_value += amount * price
-    
-    for token in tx.get("sends", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        total_value += amount * price
-    
-    # If we can calculate value and it's below threshold, it's dust
-    return total_value > 0 and total_value < threshold_usd
-
-
-def _is_overhead_transaction(tx: Dict, token_dict: Dict, threshold_usd: float = 1.0) -> bool:
-    """
-    Detect overhead transactions - those with negligible net value.
-    
-    These are transactions like order placement, gas fees, etc. where the
-    net value moved is below the threshold. Real position changes involve
-    significant value movement.
-    
-    Calculates: abs(receives_value - sends_value) < threshold
-    Uses price_usd from token if available (historical), otherwise falls back to token_dict.
-    """
-    receives_value = 0.0
-    sends_value = 0.0
-    
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        receives_value += amount * price
-    
-    for token in tx.get("sends", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        sends_value += amount * price
-    
-    net_value = abs(receives_value - sends_value)
-    
-    # If net value is below threshold, it's overhead
-    return net_value < threshold_usd
-
-
-def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
-    """
-    Infer the flow direction and category of a transaction based on value movement.
-    
-    Returns dict with:
-    - direction: "increase" | "decrease" | "modify" | "overhead"
-    - net_value: Net USD value (positive = received, negative = sent)
-    - sends_value: Total USD value sent
-    - receives_value: Total USD value received
-    - primary_token: Main token involved (largest value)
-    
-    Uses price_usd from token if available (historical), otherwise falls back to token_dict (current).
-    """
-    receives_value = 0.0
-    sends_value = 0.0
-    primary_token = None
-    max_token_value = 0.0
-    
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        
-        # Prefer price_usd from token (historical) over token_dict (current)
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        
-        value = amount * price
-        receives_value += value
-        
-        token_info = token_dict.get(token_id, {})
-        if value > max_token_value:
-            max_token_value = value
-            primary_token = {
-                "token_id": token_id,
-                "symbol": token_info.get("symbol") or token_info.get("optimized_symbol") or "?",
-                "amount": amount,
-                "value": value,
-                "direction": "in"
-            }
-    
-    for token in tx.get("sends", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        
-        # Prefer price_usd from token (historical) over token_dict (current)
-        if "price_usd" in token and token["price_usd"] is not None:
-            price = token["price_usd"]
-        else:
-            token_info = token_dict.get(token_id, {})
-            price = token_info.get("price", 0) or 0
-        
-        value = amount * price
-        sends_value += value
-        
-        token_info = token_dict.get(token_id, {})
-        if value > max_token_value:
-            max_token_value = value
-            primary_token = {
-                "token_id": token_id,
-                "symbol": token_info.get("symbol") or token_info.get("optimized_symbol") or "?",
-                "amount": amount,
-                "value": value,
-                "direction": "out"
-            }
-    
-    net_value = receives_value - sends_value
-    
-    # Determine direction
-    if abs(net_value) < 1.0:
-        direction = "overhead"
-    elif net_value > 0 and sends_value < 1.0:
-        direction = "decrease"  # Only receiving (closing/reducing position)
-    elif net_value < 0 and receives_value < 1.0:
-        direction = "increase"  # Only sending (opening/increasing position)
-    else:
-        direction = "modify"  # Both significant (rebalancing)
-    
     return {
-        "direction": direction,
-        "net_value": net_value,
-        "sends_value": sends_value,
-        "receives_value": receives_value,
-        "primary_token": primary_token
+        "position_id": position.get("id"),
+        "pool_address": pool.get("id", ""),
+        "chain": "eth",  # Ethereum mainnet subgraph
+        "chain_name": "Ethereum",
+        "token0": token0.get("id", ""),
+        "token1": token1.get("id", ""),
+        "token0_symbol": token0.get("symbol", "UNKNOWN"),
+        "token1_symbol": token1.get("symbol", "UNKNOWN"),
+        "fee_tier": f"{fee_tier}%",
+        "status": "ACTIVE" if liquidity > 0 else "CLOSED",
+        "liquidity": str(liquidity),
+        "deposited_token0": float(position.get("depositedToken0", 0)),
+        "deposited_token1": float(position.get("depositedToken1", 0)),
+        "withdrawn_token0": float(position.get("withdrawnToken0", 0)),
+        "withdrawn_token1": float(position.get("withdrawnToken1", 0)),
+        "collected_fees_token0": float(position.get("collectedFeesToken0", 0)),
+        "collected_fees_token1": float(position.get("collectedFeesToken1", 0)),
+        "mint_timestamp": int(tx.get("timestamp", 0)),
+        "mint_block": int(tx.get("blockNumber", 0)),
+        "data_source": "subgraph",
+        "transactions": []  # Will be populated from DeBank if available
     }
 
 
-async def _enrich_transactions_with_historical_prices(
-    transactions: List[Dict],
-    cache,
-    price_service,
-    token_dict: Dict
-) -> None:
+@router.get("/uniswap-lp")
+async def get_uniswap_lp_positions(
+    wallet: str = Query(..., description="Wallet address"),
+    force_refresh: bool = Query(False, description="Force refresh from DeBank")
+) -> dict[str, Any]:
     """
-    Fetch and cache historical prices for all transactions.
-    
-    For each transaction:
-    1. Check if we already have cached prices
-    2. If not, fetch from CoinGecko and cache
-    3. Apply the prices to the transaction tokens
-    
-    This is called once when transactions are loaded. Prices are cached
-    permanently in SQLite, so subsequent loads are instant.
+    Get ALL Uniswap V3 LP positions using subgraph as primary source.
+
+    This endpoint:
+    1. Queries Uniswap V3 subgraph for ALL positions (comprehensive)
+    2. Queries DeBank for transaction history (for enrichment)
+    3. Merges data and shows source for each position
+    4. Highlights positions that DeBank missed
     """
-    for tx in transactions:
-        tx_id = tx.get("id", tx.get("tx", {}).get("hash", ""))
-        if not tx_id:
-            continue
-        
-        # Check if we already have cached prices for this transaction
-        cached_prices = cache.get_transaction_prices(tx_id)
-        
-        # Filter out _attempted markers and lowercase keys for consistent lookups
-        actual_prices = {k.lower(): v for k, v in cached_prices.items() if k != "_attempted"} if cached_prices else {}
-        
-        # Always apply prices to ensure tokens have price_usd set
-        # This uses cached historical prices if available, otherwise falls back to token_dict
-        _apply_prices_to_transaction(tx, actual_prices, token_dict)
-        
-        # If we already attempted this tx (has _attempted marker), don't retry API calls
-        if cached_prices and "_attempted" in cached_prices:
-            continue
-        
-        # Check if we need to fetch any prices (tokens without cached prices)
-        all_tokens = (tx.get("sends", []) or []) + (tx.get("receives", []) or [])
-        tokens_needing_prices = [
-            t.get("token_id", "").lower() 
-            for t in all_tokens 
-            if t.get("token_id") and t.get("token_id", "").lower() not in actual_prices
+    try:
+        # Initialize services
+        thegraph = TheGraphService(settings.thegraph_api_key)
+        discovery = TransactionDiscoveryService()
+
+        # Step 1: Get ALL positions from Uniswap V3 subgraph (PRIMARY SOURCE)
+        logger.info(f"Querying Uniswap V3 subgraph for positions...")
+        subgraph_positions = await thegraph.get_positions_by_owner(wallet)
+
+        # Format subgraph positions
+        positions_by_pool: dict[str, dict] = {}
+        for pos in subgraph_positions:
+            formatted = _format_position_from_subgraph(pos)
+            pool_key = formatted["pool_address"].lower()
+
+            # Group by pool - if multiple positions in same pool, keep track
+            if pool_key not in positions_by_pool:
+                positions_by_pool[pool_key] = {
+                    "pool_address": formatted["pool_address"],
+                    "chain": formatted["chain"],
+                    "chain_name": formatted["chain_name"],
+                    "token0": formatted["token0"],
+                    "token1": formatted["token1"],
+                    "token0_symbol": formatted["token0_symbol"],
+                    "token1_symbol": formatted["token1_symbol"],
+                    "fee_tier": formatted["fee_tier"],
+                    "positions": [],
+                    "data_source": "subgraph",
+                    "debank_tx_count": 0,
+                    "transactions": []
+                }
+
+            positions_by_pool[pool_key]["positions"].append({
+                "position_id": formatted["position_id"],
+                "status": formatted["status"],
+                "liquidity": formatted["liquidity"],
+                "deposited_token0": formatted["deposited_token0"],
+                "deposited_token1": formatted["deposited_token1"],
+                "collected_fees_token0": formatted["collected_fees_token0"],
+                "collected_fees_token1": formatted["collected_fees_token1"],
+                "mint_timestamp": formatted["mint_timestamp"]
+            })
+
+        logger.info(f"Subgraph found {len(subgraph_positions)} positions across {len(positions_by_pool)} pools")
+
+        # Step 2: Get transactions from DeBank (SECONDARY SOURCE for history)
+        logger.info(f"Querying DeBank for transaction history...")
+        since = datetime.now() - timedelta(days=365)
+        debank_result = await discovery.discover_transactions(
+            wallet_address=wallet,
+            since=since,
+            force_refresh=force_refresh,
+            max_pages=500
+        )
+
+        all_txs = debank_result["transactions"]
+
+        # Filter for LP transactions
+        lp_projects = ['uniswap', 'pancake', 'sushi', 'aero', 'curve', 'balancer']
+        lp_txs = [
+            tx for tx in all_txs
+            if any(lp in (tx.get("project_id") or "").lower() for lp in lp_projects)
         ]
-        
-        if not tokens_needing_prices:
-            # All tokens already have cached prices
-            continue
-        
-        # Need to fetch historical prices for this transaction
-        chain = tx.get("chain", "eth")
-        timestamp = int(tx.get("time_at", 0))
-        prices_to_save = {}
-        
-        # Process sends
-        for token in tx.get("sends", []) or []:
-            token_addr = token.get("token_id", "")
-            token_addr_lower = token_addr.lower() if token_addr else ""
-            amount = float(token.get("amount", 0))
-            
-            # Add symbol from token_dict
-            token_info = token_dict.get(token_addr, {})
-            if not token.get("symbol"):
-                token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-            
-            # Skip if already has cached price
-            if token_addr_lower and token_addr_lower in actual_prices:
+
+        logger.info(f"DeBank returned {len(all_txs)} total txs, {len(lp_txs)} LP txs")
+
+        # Step 3: Match DeBank transactions to subgraph positions
+        debank_pools: set[str] = set()
+        for tx in lp_txs:
+            pool_addr = tx.get("other_addr")
+            if not pool_addr:
                 continue
-            
-            if token_addr and amount > 0:
-                try:
-                    price = await price_service.get_historical_price(token_addr, chain, timestamp)
-                    if price is not None:
-                        prices_to_save[token_addr_lower] = {"price_usd": price}
-                        token["price_usd"] = price
-                        token["value_usd"] = price * amount
-                        token["_price_source"] = "historical"
-                    else:
-                        # Fall back to current price
-                        price = token_info.get("price", 0) or 0
-                        token["price_usd"] = price
-                        token["value_usd"] = price * amount
-                        token["_price_source"] = "current"
-                except Exception as e:
-                    logger.warning(f"Failed to get historical price for {token_addr}: {e}")
-                    price = token_info.get("price", 0) or 0
-                    token["price_usd"] = price
-                    token["value_usd"] = price * amount
-                    token["_price_source"] = "current"
-        
-        # Process receives
-        for token in tx.get("receives", []) or []:
-            token_addr = token.get("token_id", "")
-            token_addr_lower = token_addr.lower() if token_addr else ""
-            amount = float(token.get("amount", 0))
-            
-            # Add symbol from token_dict
-            token_info = token_dict.get(token_addr, {})
-            if not token.get("symbol"):
-                token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-            
-            # Skip if already has cached price
-            if token_addr_lower and token_addr_lower in actual_prices:
-                continue
-            
-            if token_addr and amount > 0:
-                try:
-                    # Check if we already fetched this token in sends
-                    if token_addr_lower in prices_to_save:
-                        price = prices_to_save[token_addr_lower]["price_usd"]
-                    else:
-                        price = await price_service.get_historical_price(token_addr, chain, timestamp)
-                    
-                    if price is not None:
-                        prices_to_save[token_addr_lower] = {"price_usd": price}
-                        token["price_usd"] = price
-                        token["value_usd"] = price * amount
-                        token["_price_source"] = "historical"
-                    else:
-                        price = token_info.get("price", 0) or 0
-                        token["price_usd"] = price
-                        token["value_usd"] = price * amount
-                        token["_price_source"] = "current"
-                except Exception as e:
-                    logger.warning(f"Failed to get historical price for {token_addr}: {e}")
-                    price = token_info.get("price", 0) or 0
-                    token["price_usd"] = price
-                    token["value_usd"] = price * amount
-                    token["_price_source"] = "current"
-        
-        # Cache the prices we successfully fetched
-        if prices_to_save:
-            cache.save_transaction_prices(tx_id, prices_to_save)
-        else:
-            # Mark as attempted so we don't keep retrying failed lookups.
-            # Uses "_attempted" as a sentinel key in the prices table.
-            # This prevents infinite retry loops for tokens CoinGecko doesn't have.
-            cache.save_transaction_prices(tx_id, {"_attempted": {"price_usd": None}})
 
+            pool_key = pool_addr.lower()
+            debank_pools.add(pool_key)
 
-def _apply_prices_to_transaction(tx: Dict, cached_prices: Dict, token_dict: Dict) -> None:
-    """Apply cached prices to a transaction's tokens.
-    
-    Also adds symbol from token_dict for display purposes.
-    Note: cached_prices keys are lowercased, so we must lowercase token_addr for lookups.
-    """
-    # Create lowercased lookup for cached_prices
-    cached_prices_lower = {k.lower(): v for k, v in cached_prices.items()}
-    
-    for token in tx.get("sends", []) or []:
-        token_addr = token.get("token_id", "")
-        token_addr_lower = token_addr.lower()
-        amount = float(token.get("amount", 0))
-        
-        # Add symbol from token_dict
-        token_info = token_dict.get(token_addr, {})
-        if not token.get("symbol"):
-            token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-        
-        if token_addr_lower in cached_prices_lower:
-            price = cached_prices_lower[token_addr_lower].get("price_usd", 0)
-            token["price_usd"] = price
-            token["value_usd"] = price * amount
-            token["_price_source"] = "historical"
-        else:
-            price = token_info.get("price", 0) or 0
-            token["price_usd"] = price
-            token["value_usd"] = price * amount
-            token["_price_source"] = "current"
-    
-    for token in tx.get("receives", []) or []:
-        token_addr = token.get("token_id", "")
-        token_addr_lower = token_addr.lower()
-        amount = float(token.get("amount", 0))
-        
-        # Add symbol from token_dict
-        token_info = token_dict.get(token_addr, {})
-        if not token.get("symbol"):
-            token["symbol"] = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-        
-        if token_addr_lower in cached_prices_lower:
-            price = cached_prices_lower[token_addr_lower].get("price_usd", 0)
-            token["price_usd"] = price
-            token["value_usd"] = price * amount
-            token["_price_source"] = "historical"
-        else:
-            price = token_info.get("price", 0) or 0
-            token["price_usd"] = price
-            token["value_usd"] = price * amount
-            token["_price_source"] = "current"
+            if pool_key in positions_by_pool:
+                # Add transaction to existing pool
+                positions_by_pool[pool_key]["debank_tx_count"] += 1
+                positions_by_pool[pool_key]["data_source"] = "both"
+                positions_by_pool[pool_key]["transactions"].append({
+                    "id": tx.get("id"),
+                    "type": tx.get("tx", {}).get("name") or tx.get("cate_id") or "unknown",
+                    "timestamp": tx.get("time_at"),
+                    "hash": tx.get("tx", {}).get("hash", ""),
+                })
 
+        # Step 4: Identify pools DeBank missed
+        subgraph_only_pools = set(positions_by_pool.keys()) - debank_pools
 
-def _extract_lp_pool_address(tx: Dict) -> str:
-    """
-    Extract the pool address from an LP transaction.
-    
-    For sends: uses to_addr (where tokens are sent to the pool)
-    For receives: uses from_addr (where tokens come from the pool)
-    
-    Returns the pool address or "unknown" if can't determine.
-    """
-    pool_addrs = set()
-    
-    # Get to_addr from sends (depositing to pool)
-    for t in tx.get("sends") or []:
-        to_addr = t.get("to_addr", "")
-        # Skip NFT-related addresses (zero address for minting)
-        if to_addr and to_addr != "0x0000000000000000000000000000000000000000":
-            pool_addrs.add(to_addr.lower())
-    
-    # Get from_addr from receives (withdrawing from pool)
-    for t in tx.get("receives") or []:
-        from_addr = t.get("from_addr", "")
-        # Skip zero address (NFT minting)
-        if from_addr and from_addr != "0x0000000000000000000000000000000000000000":
-            pool_addrs.add(from_addr.lower())
-    
-    if pool_addrs:
-        # Return first pool address found (should typically be only one)
-        return list(pool_addrs)[0]
-    return "unknown"
+        # Build final results
+        pools_list = []
+        for pool_key, pool_data in positions_by_pool.items():
+            pool_data["debank_missed"] = pool_key in subgraph_only_pools
+            pool_data["position_count"] = len(pool_data["positions"])
 
+            # Sort transactions by timestamp
+            pool_data["transactions"].sort(
+                key=lambda x: x.get("timestamp", 0),
+                reverse=True
+            )
 
-def _extract_lp_token_pair(tx: Dict, token_dict: Dict) -> str:
-    """
-    Extract the token pair from an LP transaction.
-    
-    Returns a normalized pair string like "LINK/WETH" or "Unknown" if can't determine.
-    Excludes NFT tokens (amount=1) and sorts alphabetically for consistency.
-    """
-    tokens = set()
-    
-    # Build case-insensitive lookup for token_dict
-    token_dict_lower = {k.lower(): v for k, v in token_dict.items()}
-    
-    for t in (tx.get("sends") or []) + (tx.get("receives") or []):
-        amount = t.get("amount", 0)
-        token_id = t.get("token_id", "")
-        
-        # Skip NFTs (amount=1 with 32-char hex token_id)
-        if amount == 1 and len(token_id) == 32:
-            continue
-        
-        if not token_id:
-            continue
-            
-        # Get symbol from transaction data first, then token_dict (case-insensitive)
-        symbol = t.get("symbol") or ""
-        if not symbol:
-            token_info = token_dict.get(token_id) or token_dict_lower.get(token_id.lower(), {})
-            symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-        
-        # Normalize ETH variants
-        if token_id.lower() == "eth" or symbol.upper() in ["ETH", "WETH"]:
-            tokens.add("ETH")
-        elif symbol:
-            tokens.add(symbol.upper())
-        # Don't add truncated addresses - skip unknown tokens
-    
-    if len(tokens) >= 2:
-        # Sort alphabetically, but put ETH last for readability (e.g., "LINK/ETH" not "ETH/LINK")
-        token_list = sorted(tokens)
-        if "ETH" in token_list:
-            token_list.remove("ETH")
-            token_list.append("ETH")
-        return "/".join(token_list[:2])
-    elif len(tokens) == 1:
-        return list(tokens)[0]
-    else:
-        return "Unknown"
+            pools_list.append(pool_data)
 
+        # Sort by most recent activity
+        pools_list.sort(
+            key=lambda p: max(
+                [pos["mint_timestamp"] for pos in p["positions"]] +
+                [tx.get("timestamp", 0) for tx in p["transactions"]],
+                default=0
+            ),
+            reverse=True
+        )
 
-def _extract_nft_id(tx: Dict) -> str:
-    """
-    Extract NFT position ID from an LP transaction if present.
-    
-    NFT IDs appear in receives for mint transactions (amount=1, 32-char hex).
-    Returns the NFT ID or empty string if not found.
-    """
-    for t in (tx.get("receives") or []) + (tx.get("sends") or []):
-        amount = t.get("amount", 0)
-        token_id = t.get("token_id", "")
-        if amount == 1 and len(token_id) == 32:
-            return token_id
-    return ""
+        # Cleanup
+        await thegraph.close()
+        await discovery.close()
 
+        # Count active vs closed positions
+        active_positions = sum(
+            1 for pool in positions_by_pool.values()
+            for pos in pool["positions"]
+            if pos["status"] == "ACTIVE"
+        )
+        closed_positions = len(subgraph_positions) - active_positions
 
-def _group_transactions(txs: List[Dict], token_dict: Dict) -> Dict[str, Any]:
-    """
-    Group transactions by chain > protocol > type > token pair.
-    
-    For LP transactions, groups by the token pair (e.g., "LINK/WETH").
-    For other transactions, groups by primary token.
-    
-    Returns nested dict structure with transactions and metadata per group.
-    """
-    groups = {}
-    
-    for tx in txs:
-        chain = tx.get("chain", "unknown")
-        project_id = tx.get("project_id", "") or "unknown"
-        
-        # Infer type from transaction name or category
-        tx_name = (tx.get("tx", {}).get("name") or "").lower()
-        cate_id = tx.get("cate_id", "")
-        
-        # Determine type
-        is_lp = any(kw in tx_name for kw in ["mint", "burn", "increaseliquidity", "decreaseliquidity", "collect", "multicall"])
-        is_lp_protocol = any(p in project_id.lower() for p in ["uniswap", "aero", "velo", "pancake", "sushi", "curve", "balancer"])
-        
-        if is_lp and is_lp_protocol:
-            tx_type = "lp"
-        elif any(kw in tx_name for kw in ["executeorder", "createorder", "cancelorder", "multicall"]) and "gmx" in project_id:
-            tx_type = "perpetual"
-        elif any(kw in tx_name for kw in ["deposit", "withdraw", "supply", "borrow", "repay"]):
-            tx_type = "yield"
-        else:
-            tx_type = "other"
-        
-        # Get token identifier based on transaction type
-        if tx_type == "lp":
-            # For LP: group by token pair (e.g., "LINK/ETH")
-            token_pair = _extract_lp_token_pair(tx, token_dict)
-            nft_id = _extract_nft_id(tx)
-            group_identifier = token_pair
-            display_name = token_pair
-            # Store NFT ID on transaction if present
-            if nft_id:
-                tx["_nft_id"] = nft_id
-        else:
-            # For others: use primary token from flow analysis
-            flow = _infer_flow_direction(tx, token_dict)
-            group_identifier = flow.get("primary_token", {}).get("symbol", "Unknown") if flow.get("primary_token") else "Unknown"
-            display_name = group_identifier
-            tx["_flow"] = flow
-        
-        # Build group key
-        group_key = f"{chain}|{project_id}|{tx_type}|{group_identifier}"
-        
-        if group_key not in groups:
-            groups[group_key] = {
-                "chain": chain,
-                "protocol": project_id,
-                "type": tx_type,
-                "token": display_name,
-                "transactions": [],
-                "total_in": 0.0,
-                "total_out": 0.0,
-                "latest_time": 0,
-                "is_open": False
-            }
-        
-        # Add flow data to transaction if not already set
-        if "_flow" not in tx:
-            flow = _infer_flow_direction(tx, token_dict)
-            tx["_flow"] = flow
-        else:
-            flow = tx["_flow"]
-        
-        groups[group_key]["transactions"].append(tx)
-        groups[group_key]["total_in"] += flow["receives_value"]
-        groups[group_key]["total_out"] += flow["sends_value"]
-        
-        tx_time = tx.get("time_at", 0)
-        if tx_time > groups[group_key]["latest_time"]:
-            groups[group_key]["latest_time"] = tx_time
-    
-    # Sort groups by latest activity
-    sorted_groups = sorted(groups.values(), key=lambda g: -g["latest_time"])
-    
-    return {
-        "groups": sorted_groups,
-        "total_groups": len(sorted_groups),
-        "total_transactions": len(txs)
-    }
-
-
-def _categorize_transaction(tx: Dict) -> str:
-    """
-    Categorize transaction for Build page display.
-    
-    Categories:
-    - position: Creates/modifies a position (mint, burn, open, close, etc.)
-    - trade: Swap, exchange, bridge
-    - approval: Token approval (usually bundled with position tx)
-    - reward: Fee collection, rewards claim
-    - transfer: Simple send/receive
-    - other: Uncategorized
-    """
-    cate_id = tx.get("cate_id", "")
-    project_id = tx.get("project_id", "")
-    tx_name = tx.get("tx", {}).get("name", "") or ""
-    
-    # Position-creating transactions
-    position_keywords = [
-        "mint", "burn", "increaseLiquidity", "decreaseLiquidity",
-        "addLiquidity", "removeLiquidity", "collect",
-        "executeOrder", "batch",  # GMX
-        "deposit", "withdraw", "borrow", "repay",  # Lending
-        "stake", "unstake"
-    ]
-    
-    for keyword in position_keywords:
-        if keyword.lower() in tx_name.lower():
-            return "position"
-    
-    # Trade transactions
-    trade_keywords = ["swap", "exchange", "bridge", "fill"]
-    for keyword in trade_keywords:
-        if keyword.lower() in tx_name.lower():
-            return "trade"
-    
-    # Approval transactions
-    if cate_id == "approve":
-        return "approval"
-    
-    # Reward/fee transactions
-    reward_keywords = ["claim", "collect", "harvest", "reward"]
-    for keyword in reward_keywords:
-        if keyword.lower() in tx_name.lower():
-            return "reward"
-    
-    # Transfer transactions
-    if cate_id == "send" or cate_id == "receive":
-        return "transfer"
-    
-    # Protocol-specific detection
-    if "gmx" in (project_id or "").lower():
-        return "position"
-    if "uniswap" in (project_id or "").lower():
-        return "position"
-    if "euler" in (project_id or "").lower():
-        return "position"
-    
-    return "other"
-
-
-def _infer_flow_direction(tx: Dict, token_dict: Dict) -> Dict[str, Any]:
-    """
-    Infer the flow direction of a transaction based on net value.
-    
-    Returns:
-        {
-            "direction": "increase" | "decrease" | "modify",
-            "netValue": float (positive = received, negative = sent),
-            "sendValue": float,
-            "receiveValue": float,
+        # Build summary
+        summary = {
+            "subgraph_positions": len(subgraph_positions),
+            "subgraph_pools": len(positions_by_pool),
+            "active_positions": active_positions,
+            "closed_positions": closed_positions,
+            "debank_total_txs": len(all_txs),
+            "debank_lp_txs": len(lp_txs),
+            "note": "DeBank returns Position Manager address, not pool address - subgraph is primary source for LP positions"
         }
-    """
-    receives_value = 0.0
-    sends_value = 0.0
-    
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
-        receives_value += amount * price
-    
-    for token in tx.get("sends", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
-        sends_value += amount * price
-    
-    net_value = receives_value - sends_value
-    
-    # Determine direction based on net flow
-    if net_value < -1:  # Significant money out
-        direction = "increase"  # Opening/increasing position
-    elif net_value > 1:  # Significant money in
-        direction = "decrease"  # Closing/reducing position
-    else:
-        direction = "modify"  # Rebalancing or minimal change
-    
-    return {
-        "direction": direction,
-        "netValue": round(net_value, 2),
-        "sendValue": round(sends_value, 2),
-        "receiveValue": round(receives_value, 2),
-    }
 
-
-def _infer_tx_position_type(tx: Dict, project_id: str) -> str:
-    """
-    Infer position type from transaction and project.
-    """
-    tx_name = (tx.get("tx", {}).get("name") or "").lower()
-    project_lower = project_id.lower()
-    
-    # GMX perpetuals
-    if "gmx" in project_lower:
-        # Check for LP vs perpetual
-        if "gm" in tx_name or "liquidity" in tx_name.lower():
-            return "lp"
-        return "perpetual"
-    
-    # Uniswap/PancakeSwap LP
-    if any(x in project_lower for x in ["uniswap", "pancake", "sushi", "curve"]):
-        return "lp"
-    
-    # Lending/Yield
-    if any(x in project_lower for x in ["euler", "aave", "compound", "silo", "morpho"]):
-        return "yield"
-    
-    # Staking
-    if "stake" in tx_name or "staking" in project_lower:
-        return "staking"
-    
-    return "other"
-
-
-def _extract_token_from_tx(tx: Dict, token_dict: Dict) -> str:
-    """
-    Extract the primary token symbol from a transaction.
-    Looks at the largest value token in sends or receives.
-    """
-    all_tokens = []
-    
-    for token in tx.get("sends", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
-        symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-        value = amount * price
-        if symbol and value > 0:
-            all_tokens.append((symbol, value))
-    
-    for token in tx.get("receives", []) or []:
-        token_id = token.get("token_id", "")
-        amount = float(token.get("amount", 0))
-        token_info = token_dict.get(token_id, {})
-        price = token_info.get("price", 0) or 0
-        symbol = token_info.get("symbol") or token_info.get("optimized_symbol") or ""
-        value = amount * price
-        if symbol and value > 0:
-            all_tokens.append((symbol, value))
-    
-    if not all_tokens:
-        return "Unknown"
-    
-    # Return the token with highest value
-    all_tokens.sort(key=lambda x: -x[1])
-    return all_tokens[0][0]
-
-
-def _group_transactions(
-    transactions: List[Dict],
-    token_dict: Dict,
-    open_position_keys: set = None
-) -> List[Dict]:
-    """
-    Group transactions by Network > Protocol > Type > Token.
-    
-    Returns list of groups, each with:
-    {
-        "id": unique group ID,
-        "chain": chain ID,
-        "chainName": display name,
-        "protocol": protocol ID,
-        "protocolName": display name,
-        "type": position type (lp, perpetual, yield, etc.),
-        "token": primary token symbol,
-        "displayName": human-readable group name,
-        "transactions": list of transactions,
-        "transactionCount": count,
-        "latestActivity": timestamp,
-        "isOpen": boolean (matches an open DeBank position),
-        "totalIn": total received value,
-        "totalOut": total sent value,
-        "netFlow": net value change,
-    }
-    """
-    groups = {}
-    
-    for tx in transactions:
-        chain = tx.get("chain", "unknown")
-        project_id = tx.get("project_id") or "unknown"
-        
-        # Infer type and token
-        pos_type = _infer_tx_position_type(tx, project_id)
-        token = _extract_token_from_tx(tx, token_dict)
-        
-        # Create group key
-        group_key = f"{chain}_{project_id}_{pos_type}_{token}".lower()
-        
-        if group_key not in groups:
-            # Clean up protocol name
-            protocol_name = project_id.replace("arb_", "").replace("eth_", "").replace("base_", "")
-            protocol_name = protocol_name.replace("_", " ").title()
-            
-            # Check if this matches an open position
-            is_open = open_position_keys and group_key in open_position_keys
-            
-            groups[group_key] = {
-                "id": group_key,
-                "chain": chain,
-                "chainName": DEFAULT_CHAIN_NAMES.get(chain, chain.upper()),
-                "protocol": project_id,
-                "protocolName": protocol_name,
-                "type": pos_type,
-                "token": token,
-                "displayName": f"{protocol_name} {pos_type.upper()} {token}",
-                "transactions": [],
-                "transactionCount": 0,
-                "latestActivity": 0,
-                "isOpen": is_open,
-                "totalIn": 0.0,
-                "totalOut": 0.0,
-                "netFlow": 0.0,
+        return {
+            "status": "success",
+            "data": {
+                "pools": pools_list,
+                "summary": summary,
+                "data_sources": {
+                    "primary": "Uniswap V3 Subgraph (comprehensive)",
+                    "secondary": "DeBank API (transaction history)"
+                }
             }
-        
-        # Add transaction to group
-        groups[group_key]["transactions"].append(tx)
-        groups[group_key]["transactionCount"] += 1
-        
-        # Update latest activity
-        tx_time = tx.get("time_at", 0)
-        if tx_time > groups[group_key]["latestActivity"]:
-            groups[group_key]["latestActivity"] = tx_time
-        
-        # Update totals
-        flow = _infer_flow_direction(tx, token_dict)
-        groups[group_key]["totalIn"] += flow["receiveValue"]
-        groups[group_key]["totalOut"] += flow["sendValue"]
-        groups[group_key]["netFlow"] += flow["netValue"]
-    
-    # Convert to list and sort by latest activity (most recent first)
-    result = list(groups.values())
-    result.sort(key=lambda x: -x["latestActivity"])
-    
-    # Round totals
-    for g in result:
-        g["totalIn"] = round(g["totalIn"], 2)
-        g["totalOut"] = round(g["totalOut"], 2)
-        g["netFlow"] = round(g["netFlow"], 2)
-    
+        }
+
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+@router.get("/subgraph-only")
+async def get_subgraph_positions(
+    wallet: str = Query(..., description="Wallet address")
+) -> dict[str, Any]:
+    """
+    Get positions directly from Uniswap V3 subgraph only.
+    Useful for debugging and comparing with DeBank.
+    """
+    try:
+        thegraph = TheGraphService(settings.thegraph_api_key)
+        positions = await thegraph.get_positions_by_owner(wallet)
+        await thegraph.close()
+
+        # Format for display
+        formatted = []
+        for pos in positions:
+            formatted.append(_format_position_from_subgraph(pos))
+
+        # Count active vs closed
+        active = sum(1 for p in formatted if p["status"] == "ACTIVE")
+        closed = sum(1 for p in formatted if p["status"] == "CLOSED")
+
+        return {
+            "status": "success",
+            "data": {
+                "positions": formatted,
+                "total": len(formatted),
+                "active": active,
+                "closed": closed,
+                "source": "Uniswap V3 Subgraph (Ethereum Mainnet)"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+@router.get("/position-history/{position_id}")
+async def get_position_history(
+    position_id: str,
+    wallet: str = Query(..., description="Wallet address (required for accurate amounts)")
+) -> dict[str, Any]:
+    """
+    Get complete transaction history for a specific position.
+
+    STANDARDIZED DATA PIPELINE:
+    - Structure: Subgraph (position info, snapshots, timestamps, blocks)
+    - Amounts: DeBank (ALL token amounts - deposits, withdraws, fees)
+    - Prices: Subgraph (historical prices at block level)
+    - Values: Computed (amount * price)
+
+    Returns all deposits, withdrawals, and fee collections with:
+    - Transaction hash
+    - Timestamp
+    - Token amounts (from DeBank)
+    - USD values at time of transaction (from Subgraph prices)
+    """
+    try:
+        thegraph = TheGraphService(settings.thegraph_api_key)
+
+        # Fetch DeBank transactions for accurate token amounts
+        discovery = TransactionDiscoveryService()
+        since = datetime.now() - timedelta(days=365 * 3)  # 3 years of history
+        debank_result = await discovery.discover_transactions(
+            wallet_address=wallet,
+            since=since,
+            max_pages=100
+        )
+
+        # Build dict of tx_hash -> tx data for Uniswap transactions
+        debank_txs = {}
+        for tx in debank_result.get("transactions", []):
+            if "uniswap" in (tx.get("project_id") or "").lower():
+                tx_hash = tx.get("id", "").lower()
+                if tx_hash:
+                    debank_txs[tx_hash] = tx
+
+        logger.info(f"Loaded {len(debank_txs)} Uniswap transactions from DeBank for amounts")
+        await discovery.close()
+
+        # Get position history with DeBank amounts + Subgraph prices
+        history = await thegraph.get_position_history(position_id, debank_txs=debank_txs)
+        await thegraph.close()
+
+        if not history:
+            return {
+                "status": "error",
+                "detail": {"error": f"Position {position_id} not found"}
+            }
+
+        return {
+            "status": "success",
+            "data": history
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting position history: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+# ============================================================================
+# GMX V2 Perpetual Position Endpoints
+# ============================================================================
+
+@router.get("/gmx-positions")
+async def get_gmx_positions(
+    wallet: str = Query(..., description="Wallet address")
+) -> dict[str, Any]:
+    """
+    Get ALL GMX V2 perpetual positions (active and closed) on Arbitrum.
+
+    GMX Data Pipeline (self-contained - no DeBank needed):
+    - Structure: GMX Subgraph (positionKey groups trades)
+    - Amounts: GMX Subgraph (sizeInUsd, sizeDeltaUsd, collateralAmount)
+    - Prices: GMX Subgraph (executionPrice at trade time)
+    - Fees: GMX Subgraph (borrowingFee, fundingFee, positionFee)
+    - P&L: GMX Subgraph (basePnlUsd)
+
+    Returns positions grouped by positionKey with summary stats.
+    """
+    try:
+        gmx = GMXSubgraphService()
+        positions = await gmx.get_all_positions(wallet)
+        await gmx.close()
+
+        # Count active vs closed
+        active = sum(1 for p in positions if p["status"] == "ACTIVE")
+        closed = sum(1 for p in positions if p["status"] == "CLOSED")
+
+        # Calculate totals
+        total_pnl = sum(p["total_pnl_usd"] for p in positions)
+        total_size = sum(p["current_size_usd"] for p in positions)
+
+        return {
+            "status": "success",
+            "data": {
+                "positions": positions,
+                "summary": {
+                    "total_positions": len(positions),
+                    "active_positions": active,
+                    "closed_positions": closed,
+                    "total_current_size_usd": total_size,
+                    "total_realized_pnl_usd": total_pnl,
+                },
+                "data_sources": {
+                    "structure": "GMX Synthetics Subgraph (Arbitrum)",
+                    "amounts": "GMX Subgraph (self-contained)",
+                    "prices": "GMX Subgraph (executionPrice)",
+                    "fees": "GMX Subgraph (borrowing/funding/position fees)",
+                }
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting GMX positions: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+@router.get("/gmx-trades")
+async def get_gmx_trades(
+    wallet: str = Query(..., description="Wallet address")
+) -> dict[str, Any]:
+    """
+    Get ALL GMX V2 trades as a flat list (no position grouping).
+
+    This is the new flat trade list endpoint optimized for display in a
+    sortable/filterable table. Each trade is a standalone record.
+
+    Returns:
+        List of trades with: market, side, action, size, price, pnl, fees, tx
+    """
+    try:
+        gmx = GMXSubgraphService()
+        trades = await gmx.get_all_trades(wallet)
+        await gmx.close()
+
+        # Calculate summary stats
+        total_pnl = sum(t["pnl_usd"] for t in trades)
+        total_trades = len(trades)
+        unique_markets = len(set(t["market"] for t in trades))
+        longs = sum(1 for t in trades if t["is_long"])
+        shorts = total_trades - longs
+
+        return {
+            "status": "success",
+            "data": {
+                "trades": trades,
+                "summary": {
+                    "total_trades": total_trades,
+                    "unique_markets": unique_markets,
+                    "long_trades": longs,
+                    "short_trades": shorts,
+                    "total_pnl_usd": total_pnl,
+                },
+                "data_source": "GMX Synthetics Subgraph (Arbitrum)"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting GMX trades: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+@router.get("/gmx-position-history/{position_key:path}")
+async def get_gmx_position_history(
+    position_key: str
+) -> dict[str, Any]:
+    """
+    Get complete trade history for a specific GMX position.
+
+    GMX Data Pipeline (self-contained):
+    - Structure: positionKey groups all trades
+    - Amounts: sizeDeltaUsd, collateralAmount
+    - Prices: executionPrice at trade time
+    - Fees: borrowingFeeAmount, fundingFeeAmount, positionFeeAmount
+    - P&L: basePnlUsd
+
+    Returns all opens, increases, decreases, and closes with:
+    - Transaction hash
+    - Timestamp
+    - Size changes
+    - Execution price
+    - P&L (for decreases)
+    - Fees paid
+    """
+    try:
+        gmx = GMXSubgraphService()
+        history = await gmx.get_position_history_by_key(position_key)
+        await gmx.close()
+
+        if not history:
+            return {
+                "status": "error",
+                "detail": {"error": f"Position {position_key} not found"}
+            }
+
+        return {
+            "status": "success",
+            "data": history
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting GMX position history: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }
+
+
+# ============================================================================
+# Strategy Loading - Batch Enrichment for Ledger Analysis
+# ============================================================================
+
+
+class StrategyLPItem(BaseModel):
+    """LP position item for strategy loading."""
+    model_config = {"extra": "ignore"}  # Ignore extra fields from frontend
+
+    type: str = "lp"
+    position_id: str
+    pool_address: str
+    token0_symbol: str
+    token1_symbol: str
+    fee_tier: str
+    status: str
+
+
+class StrategyGMXTradeItem(BaseModel):
+    """GMX trade item for strategy loading."""
+    model_config = {"extra": "ignore"}  # Ignore extra fields from frontend
+
+    type: str = "gmx_trade"
+    tx_hash: str
+    position_key: str
+    # market and market_address are optional - can derive from market_name
+    market: Optional[str] = None
+    market_address: Optional[str] = None
+    market_name: Optional[str] = None  # Legacy field - "ETH/USD" format
+    side: str
+    action: str
+    size_delta_usd: float
+    collateral_usd: float = 0.0  # Optional - default to 0
+    execution_price: float
+    pnl_usd: float
+    timestamp: int
+
+    def get_market(self) -> str:
+        """Get market symbol, deriving from market_name if needed."""
+        if self.market:
+            return self.market
+        if self.market_name:
+            # Extract "ETH" from "ETH/USD" or "ETH/USD [1]"
+            return self.market_name.split("/")[0].strip()
+        return "UNKNOWN"
+
+
+class StrategyLoadRequest(BaseModel):
+    """Request body for loading a strategy into Ledger format."""
+    wallet: str  # Needed for DeBank enrichment
+    lp_items: list[StrategyLPItem] = []
+    gmx_items: list[StrategyGMXTradeItem] = []
+
+
+@router.post("/strategy/debug")
+async def debug_strategy_request(request: dict[str, Any]) -> dict[str, Any]:
+    """Debug endpoint to see raw request body."""
+    logger.info(f"DEBUG: Raw request body: {request}")
+    return {
+        "status": "debug",
+        "received": request,
+        "wallet": request.get("wallet"),
+        "lp_items_count": len(request.get("lp_items", [])),
+        "gmx_items_count": len(request.get("gmx_items", [])),
+        "lp_items_sample": request.get("lp_items", [])[:1] if request.get("lp_items") else [],
+        "gmx_items_sample": request.get("gmx_items", [])[:1] if request.get("gmx_items") else [],
+    }
+
+
+def aggregate_gmx_trades_to_positions(trades: list[StrategyGMXTradeItem]) -> list[dict[str, Any]]:
+    """
+    Aggregate individual GMX trades into position-level data for Ledger.
+
+    IMPORTANT: Only aggregates the trades that were selected by the user.
+    This ensures historical trades not part of the strategy are excluded.
+
+    Returns PerpetualPosition-like objects for LedgerMatrix consumption.
+    """
+    if not trades:
+        return []
+
+    positions: dict[str, dict[str, Any]] = {}
+
+    for trade in trades:
+        key = trade.position_key
+        # Use get_market() to derive market from market_name if needed
+        market = trade.get_market()
+        market_address = trade.market_address or ""
+
+        if key not in positions:
+            positions[key] = {
+                "position_key": key,
+                "market": market,
+                "market_address": market_address,
+                "side": trade.side,
+                "is_long": trade.side == "Long",
+                "trades": [],
+                "total_size_usd": 0.0,
+                "weighted_entry_sum": 0.0,
+                "weighted_entry_size": 0.0,
+                "realized_pnl": 0.0,
+                "total_fees_usd": 0.0,
+                "initial_margin_usd": 0.0,
+                "first_trade_timestamp": trade.timestamp,
+                "last_trade_timestamp": trade.timestamp,
+            }
+
+        pos = positions[key]
+        pos["trades"].append({
+            "tx_hash": trade.tx_hash,
+            "action": trade.action,
+            "size_delta_usd": trade.size_delta_usd,
+            "collateral_usd": trade.collateral_usd,
+            "execution_price": trade.execution_price,
+            "pnl_usd": trade.pnl_usd,
+            "timestamp": trade.timestamp,
+        })
+
+        # Track timestamps
+        if trade.timestamp < pos["first_trade_timestamp"]:
+            pos["first_trade_timestamp"] = trade.timestamp
+        if trade.timestamp > pos["last_trade_timestamp"]:
+            pos["last_trade_timestamp"] = trade.timestamp
+
+        # Track size and entry price
+        if trade.action in ("Open", "Increase"):
+            pos["total_size_usd"] += trade.size_delta_usd
+            pos["weighted_entry_sum"] += trade.execution_price * trade.size_delta_usd
+            pos["weighted_entry_size"] += trade.size_delta_usd
+            # First Open trade sets initial margin
+            if trade.action == "Open" and pos["initial_margin_usd"] == 0:
+                pos["initial_margin_usd"] = trade.collateral_usd
+        elif trade.action in ("Decrease", "Close"):
+            pos["total_size_usd"] -= trade.size_delta_usd
+            pos["realized_pnl"] += trade.pnl_usd
+
+    # Calculate weighted average entry price and format for Ledger
+    result = []
+    for pos in positions.values():
+        entry_price = 0.0
+        if pos["weighted_entry_size"] > 0:
+            entry_price = pos["weighted_entry_sum"] / pos["weighted_entry_size"]
+
+        # Determine status based on remaining size
+        status = "ACTIVE" if pos["total_size_usd"] > 0.01 else "CLOSED"
+
+        # Format as PerpetualPosition for LedgerMatrix
+        result.append({
+            "type": "perpetual",
+            "protocol": "GMX V2",
+            "position_name": f"{pos['market']}/USD",
+            "position_key": pos["position_key"],
+            "chain": "arb",
+            "side": pos["side"],
+            "base_token": {
+                "symbol": pos["market"],
+                "address": pos["market_address"],
+                "price": 0.0,  # Would need live price feed
+            },
+            "margin_token": {
+                "symbol": "USDC",
+                "address": "",
+                "amount": pos["initial_margin_usd"],
+                "price": 1.0,
+                "value_usd": pos["initial_margin_usd"],
+            },
+            "position_size": pos["total_size_usd"] / entry_price if entry_price > 0 else 0,
+            "position_value_usd": pos["total_size_usd"],
+            "entry_price": entry_price,
+            "mark_price": 0.0,  # Would need live price feed
+            "liquidation_price": 0.0,
+            "leverage": pos["total_size_usd"] / pos["initial_margin_usd"] if pos["initial_margin_usd"] > 0 else 0,
+            # pnl_usd = UNREALIZED P&L (from live position data)
+            # For strategy trades, we don't have live data, so this is 0
+            # Realized P&L is tracked separately in realized_pnl_usd and perpHistory
+            "pnl_usd": 0.0,
+            "total_value_usd": pos["total_size_usd"],
+            "debt_usd": 0.0,
+            "net_value_usd": pos["total_size_usd"],
+            "position_index": pos["position_key"],
+            "status": status,
+            # Enriched fields for Performance Analysis
+            "initial_margin_usd": pos["initial_margin_usd"],
+            "funding_rewards_usd": 0.0,  # Would need additional query
+            "realized_pnl_usd": pos["realized_pnl"],
+            "total_fees_usd": pos["total_fees_usd"],
+            "trade_count": len(pos["trades"]),
+            "trades": pos["trades"],
+        })
+
     return result
 
 
-def _filter_transactions(
-    transactions: List[Dict],
-    token_dict: Dict,
-    show_spam: bool = False,
-    show_dust: bool = False,
-    show_approvals: bool = False,
-    show_bridges_swaps: bool = False,
-    show_failed: bool = False,
-    show_overhead: bool = False,
-    overhead_threshold: float = 1.0,
-    categories: Optional[List[str]] = None
-) -> Tuple[List[Dict], Dict[str, int]]:
+@router.post("/strategy/load")
+async def load_strategy_for_ledger(
+    request: StrategyLoadRequest
+) -> dict[str, Any]:
     """
-    Filter transactions for Build page display.
-    
-    Default behavior (Build page) per MVT rules:
-    - Hide spam/scam tokens
-    - Hide dust (<$0.10)
-    - Hide standalone approvals
-    - Hide bridges and swaps (not positions)
-    - Hide failed transactions
-    - Hide overhead transactions (net value < threshold)
-    - Show only position-relevant transactions
-    """
-    filtered = []
-    hidden_counts = {
-        "spam": 0,
-        "dust": 0,
-        "approval": 0,
-        "bridge_swap": 0,
-        "failed": 0,
-        "overhead": 0
-    }
-    
-    for tx in transactions:
-        # Skip spam unless explicitly shown
-        if not show_spam and _is_spam_transaction(tx, token_dict):
-            hidden_counts["spam"] += 1
-            continue
-        
-        # Skip dust unless explicitly shown
-        if not show_dust and _is_dust_transaction(tx, token_dict):
-            hidden_counts["dust"] += 1
-            continue
-        
-        # Skip bridges/swaps unless explicitly shown (MVT rule)
-        if not show_bridges_swaps and _is_bridge_or_swap(tx):
-            hidden_counts["bridge_swap"] += 1
-            continue
-        
-        # Skip failed transactions unless explicitly shown
-        if not show_failed and _is_failed_transaction(tx):
-            hidden_counts["failed"] += 1
-            continue
-        
-        # Skip overhead transactions (low net value) unless explicitly shown
-        if not show_overhead and _is_overhead_transaction(tx, token_dict, overhead_threshold):
-            hidden_counts["overhead"] += 1
-            continue
-        
-        # Categorize transaction
-        category = _categorize_transaction(tx)
-        tx["_category"] = category  # Add category to tx for frontend
-        
-        # Skip standalone approvals unless shown
-        if not show_approvals and category == "approval":
-            hidden_counts["approval"] += 1
-            continue
-        
-        # Filter by categories if specified
-        if categories and category not in categories:
-            continue
-        
-        filtered.append(tx)
-    
-    return filtered, hidden_counts
+    Load and enrich a strategy for Ledger analysis.
 
+    This endpoint mirrors the wallet/ledger endpoint data pipeline:
+    1. Uses DeBank for unclaimed LP fees (real-time)
+    2. Uses Uniswap Subgraph for LP position data and claimed fees
+    3. Aggregates GMX trades and returns perpHistory for realized P&L
 
-@router.get("/transactions")
-async def get_build_transactions(
-    wallet: str = Query(..., description="Wallet address"),
-    since: Optional[str] = Query(
-        "6m",
-        description="Start date (ISO format or relative like '30d', '6m')"
-    ),
-    until: Optional[str] = Query(
-        None,
-        description="End date (ISO format), defaults to now"
-    ),
-    chain: Optional[str] = Query(
-        None,
-        description="Filter by chain (eth, arb, op, base, etc.)"
-    ),
-    show_spam: bool = Query(False, description="Include spam/scam transactions"),
-    show_dust: bool = Query(False, description="Include dust transactions (<$0.10)"),
-    show_approvals: bool = Query(False, description="Include standalone approvals"),
-    show_bridges_swaps: bool = Query(False, description="Include bridges and swaps (not positions per MVT)"),
-    show_failed: bool = Query(False, description="Include failed transactions"),
-    force_refresh: bool = Query(False, description="Force refresh from DeBank")
-) -> Dict[str, Any]:
+    Returns the same data structure as wallet/ledger endpoint.
     """
-    Get filtered transactions for Build page.
-    
-    Returns transactions categorized and filtered for position building per MVT rules:
-    - Spam/scam tokens hidden by default
-    - Dust transactions hidden by default
-    - Standalone approvals hidden by default
-    - Bridges and swaps hidden by default (not positions)
-    - Failed transactions hidden by default
-    - Each transaction includes _category field
-    
-    Categories: position, reward, transfer, other
-    """
+    logger.info(f"Strategy load request received: wallet={request.wallet}, lp_items={len(request.lp_items)}, gmx_items={len(request.gmx_items)}")
     try:
-        # Parse dates
-        until_dt = _parse_date(until) if until else datetime.now()
-        since_dt = _parse_date(since) if since else (until_dt - timedelta(days=180))
-        
-        # Get discovery service
-        discovery = await get_discovery_service()
-        
-        # Discover transactions
-        result = await discovery.discover_transactions(
-            wallet_address=wallet,
-            chains=[chain] if chain else None,
-            since=since_dt,
-            until=until_dt,
-            force_refresh=force_refresh
-        )
-        
-        all_transactions = result["transactions"]
-        token_dict = result["token_dict"]
-        
-        # Apply Build page filtering (MVT rules)
-        filtered_transactions, hidden_counts = _filter_transactions(
-            all_transactions,
-            token_dict,
-            show_spam=show_spam,
-            show_dust=show_dust,
-            show_approvals=show_approvals,
-            show_bridges_swaps=show_bridges_swaps,
-            show_failed=show_failed
-        )
-        
-        # Build category summary
-        category_counts = {}
-        for tx in filtered_transactions:
-            cat = tx.get("_category", "other")
-            category_counts[cat] = category_counts.get(cat, 0) + 1
-        
-        # Build chain summary
-        chain_counts = {}
-        for tx in filtered_transactions:
-            ch = tx.get("chain", "unknown")
-            chain_counts[ch] = chain_counts.get(ch, 0) + 1
+        wallet = request.wallet.lower()
+        lp_items = request.lp_items
+        gmx_items = request.gmx_items
 
-        
-        return {
-            "status": "success",
-            "data": {
-                "transactions": filtered_transactions,
-                "wallet": wallet.lower(),
-                "tokenDict": token_dict,
-                "projectDict": result["project_dict"],
-                "chainNames": result.get("chain_names", DEFAULT_CHAIN_NAMES),
-                "summary": {
-                    "total": len(filtered_transactions),
-                    "totalUnfiltered": len(all_transactions),
-                    "filtered": len(all_transactions) - len(filtered_transactions),
-                    "hiddenBreakdown": hidden_counts,
-                    "byCategory": category_counts,
-                    "byChain": chain_counts,
-                },
-                "filters": {
-                    "since": since_dt.isoformat(),
-                    "until": until_dt.isoformat(),
-                    "chain": chain,
-                    "showSpam": show_spam,
-                    "showDust": show_dust,
-                    "showApprovals": show_approvals,
-                    "showBridgesSwaps": show_bridges_swaps,
-                    "showFailed": show_failed,
-                },
-                "cache": result.get("cache", {})
-            }
-        }
-        
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
-    except Exception as e:
-        logger.exception(f"Error getting build transactions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get transactions", "message": str(e)}
-        )
+        logger.info(f"Loading strategy with {len(lp_items)} LP items and {len(gmx_items)} GMX items")
 
+        # ================================================================
+        # 0. Get DeBank positions for unclaimed fees AND live perp data
+        # ================================================================
+        debank_lp_positions_by_id = {}
+        debank_perp_positions = []  # For unrealized P&L on active positions
 
-def _parse_date(date_str: str) -> datetime:
-    """Parse date string (ISO or relative format)"""
-    if not date_str:
-        return datetime.now()
-    
-    # Relative formats
-    if date_str.endswith('d'):
-        try:
-            days = int(date_str[:-1])
-            return datetime.now() - timedelta(days=days)
-        except ValueError:
-            pass
-    elif date_str.endswith('m'):
-        try:
-            months = int(date_str[:-1])
-            return datetime.now() - timedelta(days=months * 30)
-        except ValueError:
-            pass
-    elif date_str.endswith('y'):
-        try:
-            years = int(date_str[:-1])
-            return datetime.now() - timedelta(days=years * 365)
-        except ValueError:
-            pass
-    
-    # ISO format
-    try:
-        if 'T' in date_str:
-            return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-        else:
-            return datetime.fromisoformat(date_str)
-    except ValueError:
-        raise ValueError(f"Invalid date format: {date_str}")
-
-
-@router.get("/transactions/grouped")
-async def get_grouped_transactions(
-    wallet: str = Query(..., description="Wallet address"),
-    since: Optional[str] = Query(
-        "6m",
-        description="Start date (ISO format or relative like '30d', '6m')"
-    ),
-    force_refresh: bool = Query(False, description="Force refresh from DeBank")
-) -> Dict[str, Any]:
-    """
-    Get transactions grouped by Chain > Protocol > Type > Token.
-    
-    Each transaction includes flow direction inference:
-    - increase: Money going OUT (opening/adding to position)
-    - decrease: Money coming IN (closing/reducing position)
-    - modify: Both in and out (rebalancing)
-    - overhead: Negligible net value (filtered out)
-    
-    Groups are sorted by most recent activity.
-    """
-    try:
-        # Parse dates
-        until_dt = datetime.now()
-        since_dt = _parse_date(since) if since else (until_dt - timedelta(days=180))
-        
-        # Get discovery service
-        discovery = await get_discovery_service()
-        
-        # Discover transactions
-        result = await discovery.discover_transactions(
-            wallet_address=wallet,
-            chains=None,
-            since=since_dt,
-            until=until_dt,
-            force_refresh=force_refresh
-        )
-        
-        all_transactions = result["transactions"]
-        token_dict = result["token_dict"]
-        
-        # Get cache and price service
-        cache = get_cache(wallet)
-        price_service = get_price_service()
-        
-        # Fetch and cache historical prices for ALL transactions that don't have them
-        # This is done once per transaction, then cached forever
-        await _enrich_transactions_with_historical_prices(
-            all_transactions, cache, price_service, token_dict
-        )
-        
-        # Apply MVT filtering with overhead filter
-        filtered_transactions, hidden_counts = _filter_transactions(
-            all_transactions,
-            token_dict,
-            show_spam=False,
-            show_dust=False,
-            show_approvals=False,
-            show_bridges_swaps=False,
-            show_failed=False,
-            show_overhead=False,
-            overhead_threshold=1.0
-        )
-        
-        # Group transactions
-        project_dict = result.get("project_dict", {})
-        groups = group_transactions(filtered_transactions, token_dict, project_dict)
-        
-        # Get open positions from DeBank to mark groups as "open"
         try:
             debank = await get_debank_service()
-            positions_result = await debank.get_wallet_positions(wallet)
-            open_positions = positions_result.get("positions", [])
-            
-            # Build set of open protocol+chain+token combinations
-            open_keys = set()
-            for pos in open_positions:
-                protocol = (pos.get("protocol", "") or "").lower()
-                chain = pos.get("chain", "")
-                # Add any identifiable keys
-                if protocol and chain:
-                    open_keys.add(f"{chain}|{protocol}")
-            
-            # Mark groups as open if they match
-            for group in groups:
-                group_key = f"{group['chain']}|{group['protocol']}"
-                if group_key in open_keys:
-                    group["isOpen"] = True
+            debank_result = await debank.get_wallet_positions(wallet)
+            debank_positions = debank_result.get("positions", [])
+
+            # Separate LP and perp positions
+            for pos in debank_positions:
+                pos_type = pos.get("type")
+
+                if pos_type == "perpetual":
+                    # GMX perpetual position - has live unrealized P&L
+                    debank_perp_positions.append(pos)
+                else:
+                    # LP position - for unclaimed fees lookup
+                    pos_index = pos.get("position_index", "")
+                    if pos_index:
+                        debank_lp_positions_by_id[str(pos_index)] = pos
+
+            logger.info(f"Loaded {len(debank_lp_positions_by_id)} DeBank LP positions for unclaimed fees")
+            logger.info(f"Loaded {len(debank_perp_positions)} DeBank perp positions for unrealized P&L")
         except Exception as e:
-            logger.warning(f"Could not fetch open positions: {e}")
-        
+            logger.warning(f"Could not fetch DeBank positions: {e}")
+
+        # ================================================================
+        # 1. Enrich LP Positions
+        # ================================================================
+        enriched_lp_positions = []
+
+        if lp_items:
+            discovery = TransactionDiscoveryService()
+            graph = TheGraphService(settings.thegraph_api_key)
+
+            try:
+                # Fetch DeBank transaction history for claimed fees
+                since = datetime.now() - timedelta(days=365 * 3)
+                debank_result = await discovery.discover_transactions(
+                    wallet_address=wallet,
+                    since=since,
+                    max_pages=100
+                )
+
+                # Build dict of tx_hash -> tx data for Uniswap transactions
+                debank_txs = {}
+                for tx in debank_result.get("transactions", []):
+                    if "uniswap" in (tx.get("project_id") or "").lower():
+                        tx_hash = tx.get("id", "").lower()
+                        if tx_hash:
+                            debank_txs[tx_hash] = tx
+
+                logger.info(f"Loaded {len(debank_txs)} Uniswap transactions from DeBank")
+
+                async def enrich_lp_position(item: StrategyLPItem) -> Optional[dict]:
+                    try:
+                        # STEP 1: Get full position data from subgraph
+                        full_position = await graph.get_position_with_historical_values(
+                            item.position_id,
+                            coingecko_service=None,
+                            owner_address=wallet
+                        )
+
+                        if not full_position:
+                            logger.warning(f"Could not get position data for {item.position_id}")
+                            return None
+
+                        # STEP 2: Get transaction history for claimed fees breakdown
+                        history = await graph.get_position_history(item.position_id, debank_txs)
+
+                        # Calculate claimed fees from Collect transactions
+                        claimed_fees = {"token0": 0, "token1": 0, "total": 0}
+                        transactions = []
+
+                        if history:
+                            transactions = history.get("transactions", [])
+                            for tx in transactions:
+                                if tx["action"] == "Collect":
+                                    claimed_fees["token0"] += tx["token0_value_usd"]
+                                    claimed_fees["token1"] += tx["token1_value_usd"]
+                                    claimed_fees["total"] += tx["total_value_usd"]
+
+                        # Fallback to collected_fees from position
+                        if claimed_fees["total"] == 0:
+                            collected = full_position.get("collected_fees", {})
+                            claimed_fees = {
+                                "token0": collected.get("token0", 0) * full_position.get("token0", {}).get("price", 0),
+                                "token1": collected.get("token1", 0) * full_position.get("token1", {}).get("price", 0),
+                                "total": collected.get("total_usd", 0)
+                            }
+
+                        # STEP 3: Get unclaimed fees from DeBank
+                        unclaimed_fees_usd = 0
+                        debank_pos = debank_lp_positions_by_id.get(str(item.position_id))
+                        if debank_pos:
+                            unclaimed_fees_usd = debank_pos.get("unclaimed_fees_usd", 0)
+                            logger.info(f"Position {item.position_id}: Found unclaimed fees ${unclaimed_fees_usd:.2f} from DeBank")
+
+                        # Build LPPosition format matching wallet/ledger endpoint
+                        return {
+                            "pool_name": full_position.get("pool_name", f"{item.token0_symbol}/{item.token1_symbol}"),
+                            "pool_address": full_position.get("pool_address", item.pool_address),
+                            "position_index": item.position_id,
+                            "chain": full_position.get("chain", "eth"),
+                            "fee_tier": full_position.get("fee_tier", 0.0005),
+                            "in_range": full_position.get("in_range", True),
+                            "token0": full_position.get("token0", {
+                                "symbol": item.token0_symbol,
+                                "address": "",
+                                "amount": 0,
+                                "price": 0,
+                                "value_usd": 0,
+                            }),
+                            "token1": full_position.get("token1", {
+                                "symbol": item.token1_symbol,
+                                "address": "",
+                                "amount": 0,
+                                "price": 0,
+                                "value_usd": 0,
+                            }),
+                            "total_value_usd": full_position.get("total_value_usd", 0),
+                            "unclaimed_fees_usd": unclaimed_fees_usd,
+                            "initial_deposits": full_position.get("initial_deposits", {
+                                "token0": {"amount": 0, "value_usd": 0},
+                                "token1": {"amount": 0, "value_usd": 0}
+                            }),
+                            "initial_total_value_usd": full_position.get("initial_total_value_usd", 0),
+                            "claimed_fees": claimed_fees,
+                            "position_mint_timestamp": full_position.get("position_mint_timestamp", 0),
+                            "gas_fees_usd": full_position.get("gas_fees_usd", 0),
+                            "transaction_count": full_position.get("transaction_count", len(transactions)),
+                            "status": item.status,
+                            "transactions": transactions,
+                            "data_sources": {
+                                "position": "uniswap_subgraph",
+                                "unclaimed_fees": "debank" if unclaimed_fees_usd > 0 else "none",
+                                "transactions": history.get("data_sources", {}) if history else {},
+                            },
+                        }
+                    except Exception as e:
+                        logger.error(f"Error enriching LP position {item.position_id}: {e}", exc_info=True)
+                        return None
+
+                # Parallel fetch all LP positions
+                lp_tasks = [enrich_lp_position(item) for item in lp_items]
+                lp_results = await asyncio.gather(*lp_tasks)
+                enriched_lp_positions = [r for r in lp_results if r is not None]
+
+            finally:
+                await discovery.close()
+                await graph.close()
+
+        # ================================================================
+        # 2. Aggregate GMX Trades into Positions
+        # ================================================================
+        aggregated_perp_positions = aggregate_gmx_trades_to_positions(gmx_items)
+
+        # ================================================================
+        # 2b. Enrich ACTIVE positions with DeBank live data for unrealized P&L
+        # ================================================================
+        # DeBank provides real-time unrealized P&L for live positions
+        # This is more accurate than calculating from prices since it includes
+        # funding fees and other adjustments
+
+        def normalize_market(symbol: str) -> str:
+            """Normalize market symbols for matching (ETH/WETH, BTC/WBTC)"""
+            upper = symbol.upper()
+            if upper in ("WETH", "ETH"):
+                return "ETH"
+            if upper in ("WBTC", "BTC"):
+                return "BTC"
+            return upper
+
+        def find_matching_debank_perp(
+            debank_positions: list[dict],
+            market: str,
+            side: str
+        ) -> Optional[dict]:
+            """Find a DeBank perp position matching the strategy position"""
+            normalized_market = normalize_market(market)
+
+            for pos in debank_positions:
+                # DeBank perp positions have base_token.symbol and side
+                base_symbol = pos.get("base_token", {}).get("symbol", "")
+                pos_side = pos.get("side", "")
+
+                if normalize_market(base_symbol) == normalized_market and pos_side == side:
+                    return pos
+
+            return None
+
+        # Enrich active positions with DeBank live data
+        for perp in aggregated_perp_positions:
+            if perp.get("status") != "ACTIVE":
+                continue
+
+            # Market is stored in base_token.symbol in the aggregated structure
+            market = perp.get("base_token", {}).get("symbol", "")
+            side = perp.get("side", "")
+
+            # Find matching DeBank position
+            live_position = find_matching_debank_perp(debank_perp_positions, market, side)
+
+            if live_position:
+                # Use DeBank's unrealized P&L directly - it's more accurate
+                unrealized_pnl = live_position.get("pnl_usd", 0)
+                mark_price = live_position.get("base_token", {}).get("price", 0)
+
+                perp["pnl_usd"] = unrealized_pnl
+                perp["mark_price"] = mark_price
+
+                logger.info(
+                    f"Enriched {side} {market} with DeBank live data: "
+                    f"unrealized_pnl=${unrealized_pnl:.2f}, mark_price=${mark_price:.2f}"
+                )
+            else:
+                logger.warning(
+                    f"No DeBank match found for {side} {market} - unrealized P&L unavailable"
+                )
+
+        # Calculate total realized P&L from all perp positions
+        total_realized_pnl = sum(p.get("realized_pnl_usd", 0) for p in aggregated_perp_positions)
+        total_margin = sum(p.get("initial_margin_usd", 0) for p in aggregated_perp_positions)
+
+        # ================================================================
+        # 3. Return Ledger-Ready Data (matching wallet/ledger format)
+        # ================================================================
         return {
             "status": "success",
             "data": {
-                "groups": groups,
-                "totalGroups": len(groups),
-                "totalTransactions": len(filtered_transactions),
-                "wallet": wallet.lower(),
-                "tokenDict": token_dict,
-                "projectDict": project_dict,
-                "hiddenCounts": hidden_counts,
-                "filters": {
-                    "since": since_dt.isoformat(),
-                    "until": until_dt.isoformat(),
-                }
-            }
-        }
-        
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail={"error": str(e)})
-    except Exception as e:
-        logger.exception(f"Error getting grouped transactions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get grouped transactions", "message": str(e)}
-        )
-
-
-@router.post("/enrich-prices")
-async def enrich_transaction_prices(
-    wallet: str = Query(..., description="Wallet address"),
-    tx_ids: Optional[List[str]] = Query(None),
-    max_transactions: int = Query(10)
-) -> Dict[str, Any]:
-    """
-    DEPRECATED: Historical prices are now fetched automatically when transactions are loaded.
-    
-    This endpoint is no longer needed and will be removed in a future version.
-    """
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "This endpoint is deprecated",
-            "message": "Historical prices are now fetched automatically when transactions load. No manual enrichment needed.",
-            "alternative": "GET /api/v1/build/transactions/grouped - prices are included automatically"
-        }
-    )
-
-
-@router.get("/cache-stats")
-async def get_cache_stats(
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """
-    Get cache statistics for a wallet.
-    
-    Shows transaction count, price coverage, date range, etc.
-    """
-    try:
-        cache = get_cache(wallet)
-        stats = cache.get_cache_stats()
-        
-        return {
-            "status": "success",
-            "data": stats
-        }
-        
-    except Exception as e:
-        logger.exception(f"Error getting cache stats for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get cache stats", "message": str(e)}
-        )
-
-
-@router.get("/positions")
-async def get_build_positions(
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """
-    Fetch open positions from DeBank for the Build page.
-    
-    Returns standardized position objects with:
-    - position_index (unique identifier for linking transactions)
-    - protocol, chain, name
-    - value, tokens, P&L where available
-    - detail_types for categorization
-    
-    Supports: Uniswap V3, GMX V2, Euler, Aerodrome, PancakeSwap, etc.
-    """
-    try:
-        debank = await get_debank_service()
-        
-        # Fetch raw protocol data from DeBank
-        response = await debank.client.get(
-            "/user/all_complex_protocol_list",
-            params={"id": wallet.lower()}
-        )
-        response.raise_for_status()
-        protocols = response.json()
-        
-        if not isinstance(protocols, list):
-            return {
-                "status": "success",
-                "data": {
-                    "positions": [],
-                    "wallet": wallet.lower(),
-                    "protocols": []
-                }
-            }
-        
-        positions = []
-        protocol_summary = []
-        
-        for protocol in protocols:
-            protocol_id = protocol.get("id", "")
-            chain = protocol.get("chain", "")
-            protocol_name = protocol.get("name", protocol_id)
-            items = protocol.get("portfolio_item_list", [])
-            
-            protocol_summary.append({
-                "id": protocol_id,
-                "name": protocol_name,
-                "chain": chain,
-                "itemCount": len(items)
-            })
-            
-            for item in items:
-                position = _parse_debank_position(item, protocol_id, chain, protocol_name)
-                if position:
-                    positions.append(position)
-        
-        return {
-            "status": "success",
-            "data": {
-                "positions": positions,
-                "wallet": wallet.lower(),
-                "protocols": protocol_summary,
+                "wallet": wallet,
+                "lp_positions": enriched_lp_positions,
+                "perp_positions": aggregated_perp_positions,
+                "gmx_rewards": None,  # Not applicable for strategy mode
+                "perp_history": {
+                    "realized_pnl": total_realized_pnl,
+                    "current_margin": total_margin,
+                    "total_funding_claimed": 0  # Would need additional query
+                },
+                "total_gas_fees_usd": sum(p.get("gas_fees_usd", 0) for p in enriched_lp_positions),
                 "summary": {
-                    "total": len(positions),
-                    "byProtocol": _count_by_key(positions, "protocol"),
-                    "byChain": _count_by_key(positions, "chain"),
-                    "byType": _count_by_key(positions, "type")
+                    "lp_count": len(enriched_lp_positions),
+                    "perp_count": len(aggregated_perp_positions),
+                    "total_lp_initial_value": sum(
+                        p.get("initial_total_value_usd", 0) for p in enriched_lp_positions
+                    ),
+                    "total_perp_realized_pnl": total_realized_pnl,
+                },
+                "data_sources": {
+                    "lp_positions": "uniswap_subgraph",
+                    "unclaimed_fees": "debank",
+                    "perp_positions": "strategy_trades",
+                    "unrealized_pnl": "debank",
                 }
             }
         }
-        
+
     except Exception as e:
-        logger.exception(f"Error fetching positions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to fetch positions", "message": str(e)}
-        )
-
-
-def _parse_debank_position(item: Dict, protocol_id: str, chain: str, protocol_name: str) -> Optional[Dict]:
-    """
-    Parse a DeBank portfolio item into a standardized position object.
-    
-    Handles different position types:
-    - LP positions (Uniswap, PancakeSwap, Aerodrome)
-    - Perpetuals (GMX)
-    - Lending/Yield (Euler, Aave, Compound)
-    - Vesting
-    """
-    try:
-        detail = item.get("detail", {})
-        detail_types = item.get("detail_types", [])
-        stats = item.get("stats", {})
-        pool = item.get("pool", {})
-        
-        # Get position index (unique identifier)
-        position_index = item.get("position_index")
-        
-        # Determine position type
-        if "perpetuals" in detail_types:
-            position_type = "perpetual"
-        elif "locked" in detail_types:
-            position_type = "locked"
-        elif "vesting" in detail_types:
-            position_type = "vesting"
-        elif "lending" in detail_types:
-            position_type = "lending"
-        elif detail.get("supply_token_list") and len(detail.get("supply_token_list", [])) >= 2:
-            position_type = "lp"
-        elif detail.get("supply_token_list"):
-            position_type = "yield"
-        else:
-            position_type = "other"
-        
-        # Build base position object
-        position = {
-            "id": f"{protocol_id}_{chain}_{position_index or pool.get('id', '')}",
-            "protocol": protocol_id,
-            "protocolName": protocol_name,
-            "chain": chain,
-            "type": position_type,
-            "name": item.get("name", ""),
-            "positionIndex": position_index,
-            "poolId": pool.get("id", ""),
-            "valueUsd": float(stats.get("asset_usd_value", 0)),
-            "detailTypes": detail_types,
-            "status": "open",  # DeBank only returns open positions
-        }
-        
-        # Add type-specific fields
-        if position_type == "perpetual":
-            position.update(_parse_perpetual_details(detail))
-        elif position_type == "lp":
-            position.update(_parse_lp_details(detail))
-        elif position_type in ["yield", "lending"]:
-            position.update(_parse_yield_details(detail))
-        
-        # Generate display name
-        position["displayName"] = _generate_position_name(position)
-        
-        return position
-        
-    except Exception as e:
-        logger.warning(f"Failed to parse position: {e}")
-        return None
-
-
-def _parse_perpetual_details(detail: Dict) -> Dict:
-    """Parse perpetual-specific fields from DeBank detail"""
-    return {
-        "side": detail.get("side", ""),  # "long" or "short"
-        "leverage": detail.get("leverage"),
-        "entryPrice": detail.get("entry_price"),
-        "markPrice": detail.get("mark_price"),
-        "liquidationPrice": detail.get("liquidation_price"),
-        "pnlUsd": detail.get("pnl_usd_value"),
-        "marginRate": detail.get("margin_rate"),
-        "fundingRate": detail.get("daily_funding_rate"),
-        "marginToken": detail.get("margin_token", {}).get("symbol"),
-        "positionToken": detail.get("position_token", {}).get("symbol"),
-    }
-
-
-def _parse_lp_details(detail: Dict) -> Dict:
-    """Parse LP position details from DeBank detail"""
-    supply_tokens = detail.get("supply_token_list", [])
-    reward_tokens = detail.get("reward_token_list", [])
-    
-    tokens = []
-    for token in supply_tokens:
-        tokens.append({
-            "symbol": token.get("symbol", ""),
-            "address": token.get("id", ""),
-            "amount": float(token.get("amount", 0)),
-            "price": float(token.get("price", 0)),
-            "valueUsd": float(token.get("amount", 0)) * float(token.get("price", 0))
-        })
-    
-    rewards = []
-    total_rewards_usd = 0
-    for token in reward_tokens:
-        value = float(token.get("amount", 0)) * float(token.get("price", 0))
-        total_rewards_usd += value
-        rewards.append({
-            "symbol": token.get("symbol", ""),
-            "amount": float(token.get("amount", 0)),
-            "valueUsd": value
-        })
-    
-    return {
-        "tokens": tokens,
-        "rewards": rewards,
-        "totalRewardsUsd": total_rewards_usd
-    }
-
-
-def _parse_yield_details(detail: Dict) -> Dict:
-    """Parse yield/lending position details"""
-    supply_tokens = detail.get("supply_token_list", [])
-    
-    tokens = []
-    for token in supply_tokens:
-        tokens.append({
-            "symbol": token.get("symbol", ""),
-            "address": token.get("id", ""),
-            "amount": float(token.get("amount", 0)),
-            "price": float(token.get("price", 0)),
-            "valueUsd": float(token.get("amount", 0)) * float(token.get("price", 0))
-        })
-    
-    return {"tokens": tokens}
-
-
-def _generate_position_name(position: Dict) -> str:
-    """
-    Generate a display name for a position.
-    
-    Format: [Protocol] [Type] [Asset(s)] [Date]
-    Examples:
-    - GMX Long ETH
-    - Uniswap LP ETH/USDC
-    - Euler Supply USDC
-    """
-    protocol = position.get("protocolName", position.get("protocol", "")).split("_")[-1].title()
-    pos_type = position.get("type", "")
-    
-    if pos_type == "perpetual":
-        side = position.get("side", "").title()
-        token = position.get("positionToken", "")
-        return f"{protocol} {side} {token}"
-    
-    elif pos_type == "lp":
-        tokens = position.get("tokens", [])
-        if len(tokens) >= 2:
-            pair = f"{tokens[0].get('symbol', '')}/{tokens[1].get('symbol', '')}"
-            return f"{protocol} LP {pair}"
-        return f"{protocol} LP"
-    
-    elif pos_type in ["yield", "lending"]:
-        tokens = position.get("tokens", [])
-        if tokens:
-            token = tokens[0].get("symbol", "")
-            return f"{protocol} Supply {token}"
-        return f"{protocol} Yield"
-    
-    elif pos_type == "locked":
-        return f"{protocol} Locked"
-    
-    elif pos_type == "vesting":
-        return f"{protocol} Vesting"
-    
-    return f"{protocol} Position"
-
-
-def _count_by_key(items: List[Dict], key: str) -> Dict[str, int]:
-    """Count items by a specific key"""
-    counts = {}
-    for item in items:
-        value = item.get(key, "unknown")
-        counts[value] = counts.get(value, 0) + 1
-    return counts
-
-
-@router.get("/positions/with-transactions")
-async def get_positions_with_transactions(
-    wallet: str = Query(..., description="Wallet address"),
-    since: Optional[str] = Query("6m", description="Transaction lookback period")
-) -> Dict[str, Any]:
-    """
-    DEPRECATED: This endpoint used the old auto-matching system.
-    
-    Use these endpoints instead:
-    - GET /transactions/grouped - Get transactions grouped by protocol/type/token
-    - GET /user-positions - Get user-created positions
-    - POST /user-positions/{id}/transactions/{txId} - Add transaction to position
-    """
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "This endpoint is deprecated",
-            "message": "Use /transactions/grouped and /user-positions instead",
-            "alternatives": [
-                "GET /api/v1/build/transactions/grouped",
-                "GET /api/v1/build/user-positions",
-                "POST /api/v1/build/user-positions/{id}/transactions/{txId}"
-            ]
-        }
-    )
-
-
-# NOTE: The following functions were part of the old auto-matching system and are deprecated:
-# - _match_transaction_to_position
-# - _build_closed_positions  
-# - _infer_position_type
-# - _generate_closed_position_name
-# They have been removed in favor of user-created positions via /user-positions endpoints.
-
-
-# ===== Phase 7: Strategy Persistence API =====
-
-from pydantic import BaseModel
-from typing import List as TypeList
-
-
-class StrategyPositionInput(BaseModel):
-    positionId: str
-    percentage: float = 100.0
-
-
-class CreateStrategyRequest(BaseModel):
-    name: str
-    description: str | None = None
-    positions: TypeList[StrategyPositionInput] = []
-
-
-class UpdateStrategyRequest(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    status: str | None = None
-    positions: TypeList[StrategyPositionInput] | None = None
-
-
-@router.get("/strategies")
-async def get_strategies(
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """
-    Get all strategies for a wallet.
-    """
-    try:
-        cache = get_cache(wallet)
-        strategies = cache.get_all_strategies()
-        
+        logger.error(f"Error loading strategy: {e}", exc_info=True)
         return {
-            "status": "success",
-            "data": {
-                "strategies": strategies,
-                "count": len(strategies)
-            }
+            "status": "error",
+            "detail": {"error": str(e)}
         }
-    except Exception as e:
-        logger.exception(f"Error getting strategies for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get strategies", "message": str(e)}
-        )
-
-
-@router.post("/strategies")
-async def create_strategy(
-    wallet: str = Query(..., description="Wallet address"),
-    request: CreateStrategyRequest = None
-) -> Dict[str, Any]:
-    """
-    Create a new strategy.
-    """
-    try:
-        cache = get_cache(wallet)
-        
-        # Generate unique ID
-        import time
-        strategy_id = f"strategy_{int(time.time() * 1000)}"
-        
-        # Convert positions to expected format
-        positions = [
-            {"position_id": p.positionId, "percentage": p.percentage}
-            for p in (request.positions or [])
-        ]
-        
-        strategy = cache.create_strategy(
-            strategy_id=strategy_id,
-            name=request.name,
-            description=request.description,
-            positions=positions
-        )
-        
-        return {
-            "status": "success",
-            "data": strategy
-        }
-    except Exception as e:
-        logger.exception(f"Error creating strategy for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to create strategy", "message": str(e)}
-        )
-
-
-@router.get("/strategies/{strategy_id}")
-async def get_strategy(
-    strategy_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """
-    Get a specific strategy by ID.
-    """
-    try:
-        cache = get_cache(wallet)
-        strategy = cache.get_strategy(strategy_id)
-        
-        if not strategy:
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        
-        return {
-            "status": "success",
-            "data": strategy
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error getting strategy {strategy_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get strategy", "message": str(e)}
-        )
-
-
-@router.put("/strategies/{strategy_id}")
-async def update_strategy(
-    strategy_id: str,
-    wallet: str = Query(..., description="Wallet address"),
-    request: UpdateStrategyRequest = None
-) -> Dict[str, Any]:
-    """
-    Update an existing strategy.
-    """
-    try:
-        cache = get_cache(wallet)
-        
-        # Convert positions if provided
-        positions = None
-        if request.positions is not None:
-            positions = [
-                {"positionId": p.positionId, "percentage": p.percentage}
-                for p in request.positions
-            ]
-        
-        strategy = cache.update_strategy(
-            strategy_id=strategy_id,
-            name=request.name,
-            description=request.description,
-            status=request.status,
-            positions=positions
-        )
-        
-        if not strategy:
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        
-        return {
-            "status": "success",
-            "data": strategy
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error updating strategy {strategy_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to update strategy", "message": str(e)}
-        )
-
-
-@router.delete("/strategies/{strategy_id}")
-async def delete_strategy(
-    strategy_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """
-    Delete a strategy.
-    """
-    try:
-        cache = get_cache(wallet)
-        deleted = cache.delete_strategy(strategy_id)
-        
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Strategy not found")
-        
-        return {
-            "status": "success",
-            "data": {"deleted": True, "id": strategy_id}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error deleting strategy {strategy_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to delete strategy", "message": str(e)}
-        )
-
-
-# ==================== User Position Endpoints ====================
-
-@router.get("/user-positions")
-async def get_user_positions(
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Get all user-created positions for a wallet."""
-    try:
-        cache = get_cache(wallet)
-        positions = cache.get_all_user_positions()
-        
-        return {
-            "status": "success",
-            "data": {
-                "positions": positions,
-                "count": len(positions)
-            }
-        }
-    except Exception as e:
-        logger.exception(f"Error getting user positions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get positions", "message": str(e)}
-        )
-
-
-@router.post("/user-positions")
-async def create_user_position(
-    wallet: str = Query(..., description="Wallet address"),
-    name: str = Query(..., description="Position name"),
-    description: str = Query("", description="Position description"),
-    chain: str = Query("", description="Chain"),
-    protocol: str = Query("", description="Protocol"),
-    position_type: str = Query("", description="Position type (lp, perpetual, yield)")
-) -> Dict[str, Any]:
-    """Create a new user-defined position."""
-    try:
-        cache = get_cache(wallet)
-        position = cache.create_user_position(
-            name=name,
-            description=description,
-            chain=chain,
-            protocol=protocol,
-            position_type=position_type
-        )
-        
-        return {
-            "status": "success",
-            "data": {"position": position}
-        }
-    except Exception as e:
-        logger.exception(f"Error creating position for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to create position", "message": str(e)}
-        )
-
-
-@router.get("/user-positions/{position_id}")
-async def get_user_position(
-    position_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Get a single user position."""
-    try:
-        cache = get_cache(wallet)
-        position = cache.get_user_position(position_id)
-        
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found")
-        
-        return {
-            "status": "success",
-            "data": {"position": position}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error getting position {position_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get position", "message": str(e)}
-        )
-
-
-@router.put("/user-positions/{position_id}")
-async def update_user_position(
-    position_id: str,
-    wallet: str = Query(..., description="Wallet address"),
-    name: str = Query(None, description="New position name"),
-    description: str = Query(None, description="New description"),
-    status: str = Query(None, description="New status (open/closed)")
-) -> Dict[str, Any]:
-    """Update a user position."""
-    try:
-        cache = get_cache(wallet)
-        position = cache.update_user_position(
-            position_id=position_id,
-            name=name,
-            description=description,
-            status=status
-        )
-        
-        if not position:
-            raise HTTPException(status_code=404, detail="Position not found")
-        
-        return {
-            "status": "success",
-            "data": {"position": position}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error updating position {position_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to update position", "message": str(e)}
-        )
-
-
-@router.delete("/user-positions/{position_id}")
-async def delete_user_position(
-    position_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Delete a user position."""
-    try:
-        cache = get_cache(wallet)
-        deleted = cache.delete_user_position(position_id)
-        
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Position not found")
-        
-        return {
-            "status": "success",
-            "data": {"deleted": True, "id": position_id}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error deleting position {position_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to delete position", "message": str(e)}
-        )
-
-
-@router.post("/user-positions/{position_id}/transactions/{transaction_id}")
-async def add_transaction_to_position(
-    position_id: str,
-    transaction_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Add a transaction to a position."""
-    try:
-        cache = get_cache(wallet)
-        success = cache.add_transaction_to_position(position_id, transaction_id)
-        
-        if not success:
-            raise HTTPException(status_code=400, detail="Failed to add transaction")
-        
-        position = cache.get_user_position(position_id)
-        
-        return {
-            "status": "success",
-            "data": {"position": position}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error adding transaction {transaction_id} to position {position_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to add transaction", "message": str(e)}
-        )
-
-
-@router.delete("/user-positions/{position_id}/transactions/{transaction_id}")
-async def remove_transaction_from_position(
-    position_id: str,
-    transaction_id: str,
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Remove a transaction from a position."""
-    try:
-        cache = get_cache(wallet)
-        success = cache.remove_transaction_from_position(position_id, transaction_id)
-        
-        if not success:
-            raise HTTPException(status_code=400, detail="Transaction not in position")
-        
-        position = cache.get_user_position(position_id)
-        
-        return {
-            "status": "success",
-            "data": {"position": position}
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error removing transaction {transaction_id} from position {position_id}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to remove transaction", "message": str(e)}
-        )
-
-
-@router.get("/assigned-transactions")
-async def get_assigned_transactions(
-    wallet: str = Query(..., description="Wallet address")
-) -> Dict[str, Any]:
-    """Get all transaction IDs that are assigned to positions."""
-    try:
-        cache = get_cache(wallet)
-        assigned_ids = cache.get_assigned_transaction_ids()
-        
-        return {
-            "status": "success",
-            "data": {
-                "assignedTransactionIds": list(assigned_ids),
-                "count": len(assigned_ids)
-            }
-        }
-    except Exception as e:
-        logger.exception(f"Error getting assigned transactions for {wallet}")
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to get assigned transactions", "message": str(e)}
-        )

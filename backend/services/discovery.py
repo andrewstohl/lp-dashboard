@@ -17,7 +17,7 @@ Key improvements:
 
 import httpx
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
 from datetime import datetime
 
 from backend.core.config import settings
@@ -65,7 +65,7 @@ class TransactionDiscoveryService:
     async def close(self):
         await self.client.aclose()
     
-    async def get_used_chains(self, wallet_address: str) -> List[Dict[str, Any]]:
+    async def get_used_chains(self, wallet_address: str) -> list[dict[str, Any]]:
         """
         Get list of all chains this wallet has ever used.
         This ensures we don't miss any transactions on obscure chains.
@@ -92,13 +92,13 @@ class TransactionDiscoveryService:
     async def discover_transactions(
         self,
         wallet_address: str,
-        chains: Optional[List[str]] = None,
+        chains: Optional[list[str]] = None,
         since: Optional[datetime] = None,
         until: Optional[datetime] = None,
         page_count: int = 20,
         max_pages: int = 100,
         force_refresh: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Discover all transactions for a wallet across all chains.
         Uses caching for fast subsequent loads with incremental sync.
@@ -224,12 +224,12 @@ class TransactionDiscoveryService:
     async def _fetch_all_history(
         self,
         wallet: str,
-        chains: List[str],
+        chains: list[str],
         since_ts: Optional[int],
         until_ts: Optional[int],
         page_count: int,
         max_pages: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Fetch transaction history across all chains using all_history_list endpoint.
         This is more efficient than querying each chain separately.
@@ -316,7 +316,7 @@ class TransactionDiscoveryService:
             "project_dict": project_dict
         }
 
-    def _build_summary(self, transactions: List[Dict]) -> Dict[str, Any]:
+    def _build_summary(self, transactions: list[dict]) -> dict[str, Any]:
         """Build summary statistics from transactions"""
         by_chain = {}
         by_project = {}

@@ -11,7 +11,6 @@ Key Logic:
 - Next deposit after close = NEW position lifecycle
 """
 
-from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 import logging
 
@@ -36,7 +35,7 @@ KNOWN_BASE_ASSETS = {
 }
 
 
-def is_base_asset(token_id: str, token_dict: Dict) -> bool:
+def is_base_asset(token_id: str, token_dict: dict) -> bool:
     """Check if a token is a known base asset (not a vault token)"""
     token_id_lower = token_id.lower()
     
@@ -54,7 +53,7 @@ def is_base_asset(token_id: str, token_dict: Dict) -> bool:
     return False
 
 
-def classify_yield_transaction(tx: Dict, token_dict: Dict) -> Tuple[str, float, str]:
+def classify_yield_transaction(tx: dict, token_dict: dict) -> tuple[str, float, str]:
     """
     Classify a yield/lending transaction as DEPOSIT or WITHDRAW.
     
@@ -103,9 +102,9 @@ def classify_yield_transaction(tx: Dict, token_dict: Dict) -> Tuple[str, float, 
 
 
 def split_yield_position_into_lifecycles(
-    position: Dict,
-    token_dict: Dict
-) -> List[Dict]:
+    position: dict,
+    token_dict: dict
+) -> list[dict]:
     """
     Split a yield/lending position's transactions into separate lifecycles.
     
@@ -208,9 +207,9 @@ def split_yield_position_into_lifecycles(
 
 
 def process_positions_with_lifecycle_detection(
-    positions: List[Dict],
-    token_dict: Dict
-) -> List[Dict]:
+    positions: list[dict],
+    token_dict: dict
+) -> list[dict]:
     """
     Process all positions, splitting yield/lending positions into lifecycles.
     

@@ -10,7 +10,7 @@ Used to supplement DeBank data with accurate historical values.
 """
 
 import httpx
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
 from datetime import datetime
 import logging
 
@@ -29,17 +29,38 @@ TOKEN_INFO = {
 }
 
 # Known market addresses (cached from subgraph queries)
+# Note: Some tokens have multiple markets (e.g., ETH/USD) with different collateral pools
+# decimals: index token decimals used to calculate price precision (30 - decimals)
 MARKET_INFO = {
-    "0x70d95587d40a2caf56bd97485ab3eec10bee6336": {"name": "ETH/USD", "index_token": "WETH"},
-    "0x7f1fa204bb700853d36994da19f830b6ad18455c": {"name": "LINK/USD", "index_token": "LINK"},
-    "0x47c031236e19d024b42f8ae6780e44a573170703": {"name": "BTC/USD", "index_token": "WBTC"},
-    "0x450bb6774dd8a756274e0ab4107953259d2ac541": {"name": "ETH/USD", "index_token": "WETH"},
-    "0x6853ea96ff216fab11d2d930ce3c508556a4bdc4": {"name": "DOGE/USD", "index_token": "DOGE"},
-    "0x09400d9db990d5ed3f35d7be61dfaeb900af03c9": {"name": "SOL/USD", "index_token": "SOL"},
-    "0x2b477989a149b17073d9c9c82ec9cb03591e20c6": {"name": "PEPE/USD", "index_token": "PEPE"},
-    "0x55391d178ce46e7ac8eaaea50a72d1a5a8a622da": {"name": "GMX/USD", "index_token": "GMX"},
-    "0x672fea44f4583ddad620d60c1ac31021f47558cb": {"name": "ARB/USD", "index_token": "ARB"},
+    # ETH markets (two different collateral pools) - WETH has 18 decimals
+    "0x70d95587d40a2caf56bd97485ab3eec10bee6336": {"name": "ETH/USD [1]", "index_token": "ETH", "decimals": 18},
+    "0x450bb6774dd8a756274e0ab4107953259d2ac541": {"name": "ETH/USD [2]", "index_token": "ETH", "decimals": 18},
+    # BTC market - WBTC has 8 decimals
+    "0x47c031236e19d024b42f8ae6780e44a573170703": {"name": "BTC/USD", "index_token": "BTC", "decimals": 8},
+    # Major alts - most use 18 decimals
+    "0x7f1fa204bb700853d36994da19f830b6ad18455c": {"name": "LINK/USD", "index_token": "LINK", "decimals": 18},
+    "0x09400d9db990d5ed3f35d7be61dfaeb900af03c9": {"name": "SOL/USD", "index_token": "SOL", "decimals": 9},
+    "0xc25cef6061cf5de5eb761b50e4743c1f5d7e5407": {"name": "ARB/USD", "index_token": "ARB", "decimals": 18},
+    "0x672fea44f4583ddad620d60c1ac31021f47558cb": {"name": "ARB/USD [2]", "index_token": "ARB", "decimals": 18},
+    "0x55391d178ce46e7ac8eaaea50a72d1a5a8a622da": {"name": "GMX/USD", "index_token": "GMX", "decimals": 18},
+    "0x1cbba6346f110c8a5ea739ef2d1eb182990e4eb2": {"name": "AAVE/USD", "index_token": "AAVE", "decimals": 18},
+    # Memes
+    "0x6853ea96ff216fab11d2d930ce3c508556a4bdc4": {"name": "DOGE/USD", "index_token": "DOGE", "decimals": 8},
+    "0x2b477989a149b17073d9c9c82ec9cb03591e20c6": {"name": "PEPE/USD", "index_token": "PEPE", "decimals": 18},
+    "0x2d340912aa47e33c90efb078e69e70efe2b34b9b": {"name": "WIF/USD", "index_token": "WIF", "decimals": 6},
+    "0x7c11f78ce78768518d743e81fdfa2f860c6b9a77": {"name": "SATS/USD", "index_token": "SATS", "decimals": 18},
+    # L1/L2 tokens
+    "0x9f159014cc218e942e9e9481742fe5bfa9ac5a2c": {"name": "STX/USD", "index_token": "STX", "decimals": 18},
+    "0xb3588455858a49d3244237cee00880ccb84b91dd": {"name": "XRP/USD", "index_token": "XRP", "decimals": 6},
+    "0xf22cffa7b4174554ff9dbf7b5a8c01faadcea722": {"name": "SUI/USD", "index_token": "SUI", "decimals": 9},
+    "0xfaeae570b07618d3f10360608e43c241181c4614": {"name": "NEAR/USD", "index_token": "NEAR", "decimals": 24},
 }
+
+# GMX V2 precision constants
+# GMX stores USD values with 30 decimal precision
+GMX_USD_PRECISION = 10**30
+# Collateral amounts (USDC) use 6 decimals
+USDC_PRECISION = 10**6
 
 
 class GMXSubgraphService:
@@ -58,7 +79,7 @@ class GMXSubgraphService:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
     
-    async def _query(self, query: str) -> Optional[Dict]:
+    async def _query(self, query: str) -> Optional[dict]:
         """Execute a GraphQL query."""
         try:
             client = await self._get_client()
@@ -93,11 +114,22 @@ class GMXSubgraphService:
         info = MARKET_INFO.get(address.lower(), {})
         return info.get("name", "Unknown")
 
+    def _get_price_precision(self, market_address: str) -> float:
+        """
+        Get the price precision divisor for a market.
+
+        GMX stores execution prices as: price * 10^(30 - indexTokenDecimals)
+        So to get USD price, divide by 10^(30 - decimals)
+        """
+        info = MARKET_INFO.get(market_address.lower(), {})
+        decimals = info.get("decimals", 18)  # Default to 18 for unknown tokens
+        return 10 ** (30 - decimals)
+
     async def get_all_positions(
         self,
         wallet_address: str,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get ALL GMX V2 perpetual positions (both active and closed).
 
@@ -171,7 +203,7 @@ class GMXSubgraphService:
         logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for {wallet[:10]}...")
 
         # Group by positionKey
-        positions_map: Dict[str, Dict] = {}
+        positions_map: dict[str, dict] = {}
 
         for inc in increases:
             pos_key = inc.get("positionKey", "")
@@ -193,13 +225,14 @@ class GMXSubgraphService:
                 }
 
             tx = inc.get("transaction", {})
+            price_precision = self._get_price_precision(market_addr)
             positions_map[pos_key]["increases"].append({
                 "timestamp": self._safe_int(tx.get("timestamp", 0)),
                 "tx_hash": tx.get("id", ""),
-                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / 1e30,
-                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
-                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / 1e30,
-                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / 1e6,
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / price_precision,
+                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
             })
 
         for dec in decreases:
@@ -222,14 +255,15 @@ class GMXSubgraphService:
                 }
 
             tx = dec.get("transaction", {})
+            price_precision = self._get_price_precision(market_addr)
             positions_map[pos_key]["decreases"].append({
                 "timestamp": self._safe_int(tx.get("timestamp", 0)),
                 "tx_hash": tx.get("id", ""),
-                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / 1e30,
-                "size_after_usd": self._safe_int(dec.get("sizeInUsd", 0)) / 1e30,
-                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / 1e30,
-                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / 1e6,
-                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / 1e30,
+                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / price_precision,
+                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
+                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / GMX_USD_PRECISION,
             })
 
         # Build position summaries
@@ -275,10 +309,159 @@ class GMXSubgraphService:
 
         return positions
 
+    async def get_all_trades(
+        self,
+        wallet_address: str,
+        limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """
+        Get ALL GMX V2 trades as a flat list (no position grouping).
+
+        Returns a simple list of all increases and decreases, each as a
+        standalone trade record. This is optimized for display in a flat
+        table with filtering/sorting.
+
+        Returns:
+            List of trade records with: market, side, action, size, price, pnl, fees, tx
+        """
+        wallet = wallet_address.lower()
+
+        # Query position increases
+        inc_query = """
+        {
+          positionIncreases(
+            where: {account: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: desc
+            first: %d
+          ) {
+            id
+            positionKey
+            marketAddress
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            isLong
+            transaction {
+              id
+              timestamp
+            }
+          }
+        }
+        """ % (wallet, limit)
+
+        # Query position decreases
+        dec_query = """
+        {
+          positionDecreases(
+            where: {account: "%s"}
+            orderBy: transaction__timestamp
+            orderDirection: desc
+            first: %d
+          ) {
+            id
+            positionKey
+            marketAddress
+            sizeInUsd
+            sizeDeltaUsd
+            collateralAmount
+            executionPrice
+            basePnlUsd
+            isLong
+            transaction {
+              id
+              timestamp
+            }
+          }
+        }
+        """ % (wallet, limit)
+
+        inc_data = await self._query(inc_query)
+        dec_data = await self._query(dec_query)
+
+        increases = inc_data.get("data", {}).get("positionIncreases", []) if inc_data else []
+        decreases = dec_data.get("data", {}).get("positionDecreases", []) if dec_data else []
+
+        logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for flat trade list")
+
+        trades = []
+
+        # Track first increase per position key to determine Open vs Increase
+        position_first_increase: dict[str, int] = {}
+        for inc in increases:
+            pos_key = inc.get("positionKey", "")
+            ts = self._safe_int(inc.get("transaction", {}).get("timestamp", 0))
+            if pos_key not in position_first_increase or ts < position_first_increase[pos_key]:
+                position_first_increase[pos_key] = ts
+
+        # Process increases
+        for inc in increases:
+            pos_key = inc.get("positionKey", "")
+            market_addr = inc.get("marketAddress", "").lower()
+            market_info = MARKET_INFO.get(market_addr, {})
+            tx = inc.get("transaction", {})
+            ts = self._safe_int(tx.get("timestamp", 0))
+            price_precision = self._get_price_precision(market_addr)
+
+            # Determine if this is the first increase (Open) or subsequent (Increase)
+            is_first = ts == position_first_increase.get(pos_key, 0)
+
+            trades.append({
+                "timestamp": ts,
+                "tx_hash": tx.get("id", ""),
+                "position_key": pos_key,
+                "market_address": market_addr,
+                "market": market_info.get("index_token", "?"),
+                "market_name": market_info.get("name", "Unknown"),
+                "side": "Long" if inc.get("isLong", False) else "Short",
+                "is_long": inc.get("isLong", False),
+                "action": "Open" if is_first else "Increase",
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "collateral_usd": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
+                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / price_precision,
+                "pnl_usd": 0.0,
+                "fees_usd": 0.0,  # Fees would require additional query
+            })
+
+        # Process decreases
+        for dec in decreases:
+            pos_key = dec.get("positionKey", "")
+            market_addr = dec.get("marketAddress", "").lower()
+            market_info = MARKET_INFO.get(market_addr, {})
+            tx = dec.get("transaction", {})
+            ts = self._safe_int(tx.get("timestamp", 0))
+            price_precision = self._get_price_precision(market_addr)
+            size_after = self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION
+
+            trades.append({
+                "timestamp": ts,
+                "tx_hash": tx.get("id", ""),
+                "position_key": pos_key,
+                "market_address": market_addr,
+                "market": market_info.get("index_token", "?"),
+                "market_name": market_info.get("name", "Unknown"),
+                "side": "Long" if dec.get("isLong", False) else "Short",
+                "is_long": dec.get("isLong", False),
+                "action": "Close" if size_after < 0.01 else "Decrease",
+                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": size_after,
+                "collateral_usd": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
+                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / price_precision,
+                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / GMX_USD_PRECISION,
+                "fees_usd": 0.0,  # Fees would require additional query
+            })
+
+        # Sort by timestamp, newest first
+        trades.sort(key=lambda x: x["timestamp"], reverse=True)
+
+        return trades
+
     async def get_position_history_by_key(
         self,
         position_key: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get complete trade history for a specific GMX position.
 
@@ -388,6 +571,7 @@ class GMXSubgraphService:
         market_addr = first_trade.get("marketAddress", "").lower()
         market_info = MARKET_INFO.get(market_addr, {})
         is_long = first_trade.get("isLong", False)
+        price_precision = self._get_price_precision(market_addr)
 
         # Build fee lookup by tx_hash
         fees_by_tx = {}
@@ -395,9 +579,9 @@ class GMXSubgraphService:
             tx_id = action.get("transaction", {}).get("id", "").lower()
             if tx_id:
                 fees_by_tx[tx_id] = {
-                    "borrowing_fee": self._safe_int(action.get("borrowingFeeAmount", 0)) / 1e6,
-                    "funding_fee": self._safe_int(action.get("fundingFeeAmount", 0)) / 1e6,
-                    "position_fee": self._safe_int(action.get("positionFeeAmount", 0)) / 1e6,
+                    "borrowing_fee": self._safe_int(action.get("borrowingFeeAmount", 0)) / USDC_PRECISION,
+                    "funding_fee": self._safe_int(action.get("fundingFeeAmount", 0)) / USDC_PRECISION,
+                    "position_fee": self._safe_int(action.get("positionFeeAmount", 0)) / USDC_PRECISION,
                 }
 
         # Build transactions list
@@ -415,10 +599,10 @@ class GMXSubgraphService:
                 "block_number": self._safe_int(tx.get("blockNumber", 0)),
                 "tx_hash": tx.get("id", ""),
                 "action": "Open" if is_first_increase else "Increase",
-                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / 1e30,
-                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
-                "collateral_usd": self._safe_int(inc.get("collateralAmount", 0)) / 1e6,
-                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / 1e30,
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "collateral_usd": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
+                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / price_precision,
                 "pnl_usd": 0.0,
                 "borrowing_fee_usd": fees.get("borrowing_fee", 0),
                 "funding_fee_usd": fees.get("funding_fee", 0),
@@ -432,19 +616,19 @@ class GMXSubgraphService:
             tx = dec.get("transaction", {})
             tx_hash = tx.get("id", "").lower()
             fees = fees_by_tx.get(tx_hash, {})
-            size_after = self._safe_int(dec.get("sizeInUsd", 0)) / 1e30
+            size_after = self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION
 
             transactions.append({
                 "timestamp": self._safe_int(tx.get("timestamp", 0)),
                 "block_number": self._safe_int(tx.get("blockNumber", 0)),
                 "tx_hash": tx.get("id", ""),
                 "action": "Close" if size_after < 0.01 else "Decrease",
-                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
                 "size_after_usd": size_after,
-                "collateral_usd": self._safe_int(dec.get("collateralAmount", 0)) / 1e6,
-                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / 1e30,
-                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / 1e30,
-                "price_impact_usd": self._safe_int(dec.get("priceImpactUsd", 0)) / 1e30,
+                "collateral_usd": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
+                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / price_precision,
+                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / GMX_USD_PRECISION,
+                "price_impact_usd": self._safe_int(dec.get("priceImpactUsd", 0)) / GMX_USD_PRECISION,
                 "borrowing_fee_usd": fees.get("borrowing_fee", 0),
                 "funding_fee_usd": fees.get("funding_fee", 0),
                 "position_fee_usd": fees.get("position_fee", 0),
@@ -496,7 +680,7 @@ class GMXSubgraphService:
         self,
         wallet_address: str,
         limit: int = 50
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get position increase/decrease history for a wallet.
         
@@ -572,7 +756,7 @@ class GMXSubgraphService:
     async def get_current_positions(
         self,
         wallet_address: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get current open positions by analyzing position events.
         
@@ -591,9 +775,9 @@ class GMXSubgraphService:
                 "timestamp": ts,
                 "position_key": inc.get("positionKey"),
                 "market_address": inc.get("marketAddress"),
-                "size_usd": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
+                "size_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
                 "size_tokens": self._safe_int(inc.get("sizeInTokens", 0)) / 1e18,
-                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / 1e6,
+                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
                 "is_long": inc.get("isLong"),
                 "collateral_token": inc.get("collateralTokenAddress"),
             })
@@ -605,9 +789,9 @@ class GMXSubgraphService:
                 "timestamp": ts,
                 "position_key": dec.get("positionKey"),
                 "market_address": dec.get("marketAddress"),
-                "size_usd": self._safe_int(dec.get("sizeInUsd", 0)) / 1e30,
+                "size_usd": self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
                 "size_tokens": self._safe_int(dec.get("sizeInTokens", 0)) / 1e18,
-                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / 1e6,
+                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
                 "is_long": dec.get("isLong"),
                 "collateral_token": dec.get("collateralTokenAddress"),
             })
@@ -641,7 +825,7 @@ class GMXSubgraphService:
         self,
         wallet_address: str,
         limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get trade action history with P&L for each trade.
         """
@@ -683,17 +867,19 @@ class GMXSubgraphService:
         results = []
         for t in trades:
             ts = self._safe_int(t.get("timestamp", 0))
+            market_addr = t.get("marketAddress", "")
+            price_precision = self._get_price_precision(market_addr)
             results.append({
                 "event": t.get("eventName"),
-                "market_address": t.get("marketAddress"),
-                "market_name": self._get_market_name(t.get("marketAddress", "")),
+                "market_address": market_addr,
+                "market_name": self._get_market_name(market_addr),
                 "side": "Long" if t.get("isLong") else "Short",
-                "size_delta_usd": self._safe_int(t.get("sizeDeltaUsd", 0)) / 1e30,
-                "execution_price": self._safe_int(t.get("executionPrice", 0)) / 1e30,
-                "pnl_usd": self._safe_int(t.get("pnlUsd", 0)) / 1e30,
-                "funding_fee": self._safe_int(t.get("fundingFeeAmount", 0)) / 1e30,
-                "borrowing_fee": self._safe_int(t.get("borrowingFeeAmount", 0)) / 1e30,
-                "position_fee": self._safe_int(t.get("positionFeeAmount", 0)) / 1e30,
+                "size_delta_usd": self._safe_int(t.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "execution_price": self._safe_int(t.get("executionPrice", 0)) / price_precision,
+                "pnl_usd": self._safe_int(t.get("pnlUsd", 0)) / GMX_USD_PRECISION,
+                "funding_fee": self._safe_int(t.get("fundingFeeAmount", 0)) / GMX_USD_PRECISION,
+                "borrowing_fee": self._safe_int(t.get("borrowingFeeAmount", 0)) / GMX_USD_PRECISION,
+                "position_fee": self._safe_int(t.get("positionFeeAmount", 0)) / GMX_USD_PRECISION,
                 "timestamp": ts,
                 "date": datetime.fromtimestamp(ts).isoformat() if ts else None,
                 "tx_hash": t.get("transaction", {}).get("hash"),
@@ -705,7 +891,7 @@ class GMXSubgraphService:
         self,
         wallet_address: str,
         since_timestamp: Optional[int] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Calculate total realized P&L from trade history.
         
@@ -744,7 +930,7 @@ class GMXSubgraphService:
         self,
         wallet_address: str,
         position_key: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get entry data for a specific position.
         
@@ -809,10 +995,10 @@ class GMXSubgraphService:
             all_events.append({
                 "type": "increase",
                 "timestamp": ts,
-                "size_after": self._safe_int(inc.get("sizeInUsd", 0)) / 1e30,
-                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / 1e30,
+                "size_after": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
                 "size_delta_tokens": self._safe_int(inc.get("sizeDeltaInTokens", 0)) / 1e18,
-                "collateral_delta": self._safe_int(inc.get("collateralDeltaAmount", 0)) / 1e6,
+                "collateral_delta": self._safe_int(inc.get("collateralDeltaAmount", 0)) / USDC_PRECISION,
             })
         
         for dec in decreases:
@@ -820,7 +1006,7 @@ class GMXSubgraphService:
             all_events.append({
                 "type": "decrease",
                 "timestamp": ts,
-                "size_after": self._safe_int(dec.get("sizeInUsd", 0)) / 1e30,
+                "size_after": self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
             })
         
         # Sort by timestamp
@@ -869,7 +1055,7 @@ class GMXSubgraphService:
     async def get_enriched_positions(
         self,
         wallet_address: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Get current positions enriched with entry price and historical data.
         
@@ -894,7 +1080,7 @@ class GMXSubgraphService:
         
         return enriched
     
-    async def get_market_info(self, market_addresses: List[str]) -> Dict[str, Dict]:
+    async def get_market_info(self, market_addresses: list[str]) -> dict[str, dict]:
         """
         Get market metadata for given market addresses.
         """
@@ -934,7 +1120,7 @@ class GMXSubgraphService:
         
         return result
 
-    async def get_token_prices(self, token_addresses: List[str]) -> Dict[str, float]:
+    async def get_token_prices(self, token_addresses: list[str]) -> dict[str, float]:
         """
         Get current token prices from GMX subgraph.
         
@@ -970,7 +1156,7 @@ class GMXSubgraphService:
         
         return prices
 
-    async def get_full_positions(self, wallet_address: str) -> List[Dict[str, Any]]:
+    async def get_full_positions(self, wallet_address: str) -> list[dict[str, Any]]:
         """
         Get complete position data from GMX subgraph with all calculated fields.
         
@@ -1085,37 +1271,3 @@ class GMXSubgraphService:
             })
         
         return full_positions
-
-
-# Convenience function for quick testing
-async def test_gmx_subgraph():
-    """Test the GMX subgraph service."""
-    service = GMXSubgraphService()
-    
-    wallet = "0x23b50a703d3076b73584df48251931ebf5937ba2"
-    
-    print("=== Current Positions ===")
-    positions = await service.get_current_positions(wallet)
-    for p in positions:
-        print(f"{p['market_name']} {p['side']}: ${p['size_usd']:,.2f}")
-    
-    print("\n=== Enriched Positions ===")
-    enriched = await service.get_enriched_positions(wallet)
-    for p in enriched:
-        print(f"{p['market_name']} {p['side']}")
-        print(f"  Size: ${p['size_usd']:,.2f}")
-        print(f"  Entry Price: ${p['entry_price']:,.2f}")
-        print(f"  Collateral Deposited: ${p['total_collateral_deposited']:,.2f}")
-    
-    print("\n=== Realized P&L ===")
-    pnl = await service.get_realized_pnl(wallet)
-    print(f"Total Realized P&L: ${pnl['total_realized_pnl']:,.2f}")
-    print(f"Total Fees: ${pnl['total_fees_paid']:,.2f}")
-    print(f"Net P&L: ${pnl['net_pnl']:,.2f}")
-    
-    await service.close()
-
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(test_gmx_subgraph())

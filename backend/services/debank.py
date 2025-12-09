@@ -1,5 +1,5 @@
 import httpx
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
 import logging
 from datetime import datetime
 from backend.core.config import settings
@@ -28,7 +28,7 @@ class DeBankService:
         """Close HTTP client"""
         await self.client.aclose()
 
-    async def get_wallet_positions(self, address: str) -> Dict[str, Any]:
+    async def get_wallet_positions(self, address: str) -> dict[str, Any]:
         """
         Fetch all DeFi positions for a wallet with caching
         Returns: Dict with positions and metadata
@@ -102,7 +102,7 @@ class DeBankService:
             raise ServiceUnavailableError("DeBank API")
 
     @retry_on_5xx()
-    async def _fetch_from_api(self, address: str) -> List[Dict[str, Any]]:
+    async def _fetch_from_api(self, address: str) -> list[dict[str, Any]]:
         """Internal method to fetch from API with retries"""
         response = await self.client.get(
             "/user/all_complex_protocol_list",
@@ -111,93 +111,46 @@ class DeBankService:
         response.raise_for_status()
 
         data = response.json()
-        
-        # DEBUG: Log what protocols DeBank returned
-        logger.info(f"=" * 80)
-        logger.info(f"DeBank API Response for wallet: {address}")
-        logger.info(f"Response type: {type(data)}")
-        logger.info(f"Number of protocols returned: {len(data) if isinstance(data, list) else 'Not a list'}")
-        
-        if isinstance(data, list):
-            protocol_ids = [p.get("id") for p in data if isinstance(p, dict)]
-            logger.info(f"Protocol IDs found: {protocol_ids}")
-            
-            # Log detailed info for each protocol
-            for protocol in data:
-                if isinstance(protocol, dict):
-                    protocol_id = protocol.get("id", "UNKNOWN")
-                    portfolio_items = protocol.get("portfolio_item_list", [])
-                    logger.info(f"  Protocol: {protocol_id}")
-                    logger.info(f"    - Chain: {protocol.get('chain', 'UNKNOWN')}")
-                    logger.info(f"    - Name: {protocol.get('name', 'UNKNOWN')}")
-                    logger.info(f"    - Portfolio items: {len(portfolio_items)}")
-                    
-                    # Log structure of first portfolio item if available
-                    if portfolio_items and len(portfolio_items) > 0:
-                        first_item = portfolio_items[0]
-                        logger.info(f"    - First item keys: {list(first_item.keys())}")
-                        logger.info(f"    - First item has supply_token_list: {'supply_token_list' in first_item}")
-        else:
+
+        if not isinstance(data, list):
             logger.warning(f"Unexpected response type from DeBank: {type(data)}")
-            logger.warning(f"Response content: {data}")
-        
-        logger.info(f"=" * 80)
-        
+            return []
+
+        protocol_count = len(data)
+        logger.debug(f"DeBank returned {protocol_count} protocols for {address[:10]}...")
+
         all_positions = []
 
-        # Process all protocols
-        if isinstance(data, list):
-            for protocol in data:
-                if not isinstance(protocol, dict):
-                    continue
-                    
-                protocol_id = protocol.get("id", "")
-                logger.info(f"Checking protocol: {protocol_id}")
-                
-                # Handle Uniswap v3 LP positions
-                if protocol_id == "uniswap3":
-                    logger.info("Found Uniswap v3 protocol!")
-                    portfolio_items = protocol.get("portfolio_item_list", [])
-                    logger.info(f"Number of portfolio items: {len(portfolio_items)}")
-                    
-                    for idx, portfolio_item in enumerate(portfolio_items):
-                        logger.info(f"Processing Uniswap portfolio item {idx + 1}/{len(portfolio_items)}")
-                        
-                        # Check if supply_token_list exists in detail
-                        detail = portfolio_item.get("detail", {})
-                        if "supply_token_list" in detail:
-                            position = self._parse_uniswap_position(portfolio_item, address)
-                            if position:
-                                logger.info(f"Successfully parsed Uniswap position: {position.get('pool_name')}")
-                                all_positions.append(position)
-                            else:
-                                logger.warning(f"Failed to parse Uniswap portfolio item {idx + 1}")
-                        else:
-                            logger.warning(f"Portfolio item {idx + 1} missing 'supply_token_list' in detail")
-                
-                # Handle GMX V2 perpetuals
-                elif protocol_id == "arb_gmx2":
-                    logger.info("Found GMX V2 protocol!")
-                    portfolio_items = protocol.get("portfolio_item_list", [])
-                    logger.info(f"Number of GMX items: {len(portfolio_items)}")
-                    
-                    for idx, portfolio_item in enumerate(portfolio_items):
-                        detail_types = portfolio_item.get("detail_types", [])
-                        
-                        # Only process perpetuals positions
-                        if "perpetuals" in detail_types:
-                            logger.info(f"Processing GMX perpetuals item {idx + 1}/{len(portfolio_items)}")
-                            position = self._parse_gmx_perpetual(portfolio_item, address)
-                            if position:
-                                logger.info(f"Successfully parsed GMX perpetual: {position.get('position_name')}")
-                                all_positions.append(position)
-                            else:
-                                logger.warning(f"Failed to parse GMX perpetual item {idx + 1}")
+        for protocol in data:
+            if not isinstance(protocol, dict):
+                continue
 
-        logger.info(f"Total positions found: {len(all_positions)}")
+            protocol_id = protocol.get("id", "")
+
+            # Handle Uniswap v3 LP positions
+            if protocol_id == "uniswap3":
+                portfolio_items = protocol.get("portfolio_item_list", [])
+                for portfolio_item in portfolio_items:
+                    detail = portfolio_item.get("detail", {})
+                    if "supply_token_list" in detail:
+                        position = self._parse_uniswap_position(portfolio_item, address)
+                        if position:
+                            all_positions.append(position)
+
+            # Handle GMX V2 perpetuals
+            elif protocol_id == "arb_gmx2":
+                portfolio_items = protocol.get("portfolio_item_list", [])
+                for portfolio_item in portfolio_items:
+                    detail_types = portfolio_item.get("detail_types", [])
+                    if "perpetuals" in detail_types:
+                        position = self._parse_gmx_perpetual(portfolio_item, address)
+                        if position:
+                            all_positions.append(position)
+
+        logger.debug(f"Found {len(all_positions)} positions for {address[:10]}...")
         return all_positions
 
-    def _parse_uniswap_position(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
+    def _parse_uniswap_position(self, portfolio_item: dict[str, Any], wallet: str) -> Optional[dict[str, Any]]:
         """Parse a DeBank portfolio item into our standard format"""
         try:
             # Get supply tokens from detail object
@@ -267,7 +220,7 @@ class DeBankService:
             logger.warning(traceback.format_exc())
             return None
 
-    def _parse_gmx_perpetual(self, portfolio_item: Dict[str, Any], wallet: str) -> Optional[Dict[str, Any]]:
+    def _parse_gmx_perpetual(self, portfolio_item: dict[str, Any], wallet: str) -> Optional[dict[str, Any]]:
         """Parse a GMX perpetual position into our standard format"""
         try:
             detail = portfolio_item.get("detail", {})
@@ -339,7 +292,7 @@ class DeBankService:
         chain_id: str = "eth",
         page_count: int = 20,
         max_pages: int = 10
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Fetch transaction history for a wallet
         
@@ -386,7 +339,7 @@ class DeBankService:
         self, 
         address: str,
         position_pool_address: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get all Uniswap V3 transactions for a specific position/pool
         
@@ -466,7 +419,7 @@ class DeBankService:
             "total_gas_usd": total_gas_usd
         }
 
-    async def get_gmx_transactions(self, address: str) -> Dict[str, Any]:
+    async def get_gmx_transactions(self, address: str) -> dict[str, Any]:
         """
         Get all GMX transactions and calculate gas fees
         
@@ -503,7 +456,7 @@ class DeBankService:
             "total_gas_usd": total_gas_usd
         }
 
-    async def get_gmx_rewards(self, address: str) -> Dict[str, Any]:
+    async def get_gmx_rewards(self, address: str) -> dict[str, Any]:
         """
         Get GMX rewards (separate from perpetual positions)
         
@@ -560,7 +513,7 @@ class DeBankService:
         address: str,
         since_timestamp: int,
         current_perp_margin: float = 0.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Calculate realized P&L from GMX perp closes since a given timestamp.
         

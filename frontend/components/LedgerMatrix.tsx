@@ -67,6 +67,23 @@ interface MatchedPosition {
   hedgeRatio: number;
 }
 
+// Normalize token symbols for matching (ETH/WETH, BTC/WBTC, etc.)
+const normalizeSymbol = (symbol: string): string => {
+  const upper = symbol.toUpperCase();
+  // ETH variants
+  if (upper === "WETH" || upper === "ETH") return "ETH";
+  // BTC variants
+  if (upper === "WBTC" || upper === "BTC") return "BTC";
+  // MATIC/WMATIC
+  if (upper === "WMATIC" || upper === "MATIC") return "MATIC";
+  return upper;
+};
+
+// Check if two token symbols are equivalent (handles wrapped tokens)
+const tokensMatch = (symbol1: string, symbol2: string): boolean => {
+  return normalizeSymbol(symbol1) === normalizeSymbol(symbol2);
+};
+
 export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHistory, totalGasFees = 0 }: LedgerMatrixProps) {
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
 
@@ -113,14 +130,15 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
   const matchedPositions: MatchedPosition[] = lpPositions.map((lp) => {
     const token0Symbol = lp.token0.symbol;
     const token1Symbol = lp.token1.symbol;
-    
+
+    // Use tokensMatch for flexible matching (ETH/WETH, BTC/WBTC, etc.)
     const matchingPerps = perpPositions.filter((perp) => {
       const perpToken = perp.base_token.symbol;
-      return perpToken === token0Symbol || perpToken === token1Symbol;
+      return tokensMatch(perpToken, token0Symbol) || tokensMatch(perpToken, token1Symbol);
     });
 
-    const token0Perp = matchingPerps.find((p) => p.base_token.symbol === token0Symbol);
-    const token1Perp = matchingPerps.find((p) => p.base_token.symbol === token1Symbol);
+    const token0Perp = matchingPerps.find((p) => tokensMatch(p.base_token.symbol, token0Symbol));
+    const token1Perp = matchingPerps.find((p) => tokensMatch(p.base_token.symbol, token1Symbol));
 
     const initial0Amount = lp.initial_deposits?.token0?.amount ?? lp.token0.amount;
     const initial0Value = lp.initial_deposits?.token0?.value_usd ?? lp.token0.value_usd;
@@ -147,17 +165,27 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
     const claimed0 = lp.claimed_fees?.token0 ?? 0;
     const claimed1 = lp.claimed_fees?.token1 ?? 0;
 
+    // Unrealized P&L comes from live position data (pnl_usd)
+    // For strategy mode, this is 0 since we don't have live data
     const perp0Pnl = token0Perp?.pnl_usd ?? 0;
     const perp1Pnl = token1Perp?.pnl_usd ?? 0;
+
     const perp0Margin = token0Perp?.initial_margin_usd ?? token0Perp?.margin_token?.value_usd ?? 0;
     const perp1Margin = token1Perp?.initial_margin_usd ?? token1Perp?.margin_token?.value_usd ?? 0;
     const perp0Funding = token0Perp?.funding_rewards_usd ?? 0;
     const perp1Funding = token1Perp?.funding_rewards_usd ?? 0;
-    
+
+    // Realized P&L: Use individual perp's realized_pnl_usd if available (from strategy trades)
+    // Otherwise fall back to distributing perpHistory.realized_pnl by margin ratio
     const totalMargin = perp0Margin + perp1Margin;
-    const realizedPnl = perpHistory?.realized_pnl ?? 0;
-    const perp0RealizedPnl = totalMargin > 0 ? realizedPnl * (perp0Margin / totalMargin) : 0;
-    const perp1RealizedPnl = totalMargin > 0 ? realizedPnl * (perp1Margin / totalMargin) : 0;
+    const globalRealizedPnl = perpHistory?.realized_pnl ?? 0;
+
+    // Prefer individual perp's realized_pnl_usd (set by strategy loading)
+    // Falls back to distributing perpHistory.realized_pnl by margin ratio (wallet mode)
+    const perp0RealizedPnl = token0Perp?.realized_pnl_usd ??
+      (totalMargin > 0 ? globalRealizedPnl * (perp0Margin / totalMargin) : 0);
+    const perp1RealizedPnl = token1Perp?.realized_pnl_usd ??
+      (totalMargin > 0 ? globalRealizedPnl * (perp1Margin / totalMargin) : 0);
 
     const token0: TokenExposure = {
       symbol: token0Symbol,
@@ -545,18 +573,38 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
         <div className="bg-[#0D1117] rounded-lg border border-[#30363d] p-5">
           <h4 className="text-xs font-semibold text-[#8B949E] uppercase tracking-wider mb-4">Unmatched Perpetual Positions</h4>
           <div className="space-y-3">
-            {unmatchedPerps.map((perp, idx) => (
-              <div key={idx} className="flex justify-between items-center py-2 border-b border-[#21262d] last:border-0">
-                <div>
-                  <span className="text-[#E6EDF3] font-medium">{perp.position_name}</span>
-                  <span className="text-xs text-[#8B949E] ml-2">{perp.protocol}</span>
+            {unmatchedPerps.map((perp, idx) => {
+              const unrealizedPnl = perp.pnl_usd ?? 0;
+              const realizedPnl = perp.realized_pnl_usd ?? 0;
+              const totalPnl = unrealizedPnl + realizedPnl;
+              return (
+                <div key={idx} className="flex justify-between items-center py-2 border-b border-[#21262d] last:border-0">
+                  <div>
+                    <span className="text-[#E6EDF3] font-medium">{perp.position_name}</span>
+                    <span className="text-xs text-[#8B949E] ml-2">{perp.protocol}</span>
+                    {perp.status && (
+                      <span className={`text-xs ml-2 px-1.5 py-0.5 rounded ${
+                        perp.status === "ACTIVE" ? "bg-[#238636]/20 text-[#3FB950]" : "bg-[#30363d] text-[#8B949E]"
+                      }`}>
+                        {perp.status}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[#E6EDF3]">{formatUsd(perp.position_value_usd)}</div>
+                    <div className="text-xs space-x-2">
+                      {perp.status === "ACTIVE" && (
+                        <span className={getColor(unrealizedPnl)}>Unreal: {formatUsd(unrealizedPnl)}</span>
+                      )}
+                      {realizedPnl !== 0 && (
+                        <span className={getColor(realizedPnl)}>Real: {formatUsd(realizedPnl)}</span>
+                      )}
+                      <span className={`font-medium ${getColor(totalPnl)}`}>Total: {formatUsd(totalPnl)}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-[#E6EDF3]">{formatUsd(perp.position_value_usd)}</div>
-                  <div className={`text-xs ${getColor(perp.pnl_usd)}`}>{formatUsd(perp.pnl_usd)}</div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

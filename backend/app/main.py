@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
 from contextlib import asynccontextmanager
 import logging
 
@@ -10,7 +12,6 @@ from backend.services.coingecko import close_coingecko_service
 from backend.app.api.v1 import wallet
 from backend.app.api.v1 import transactions
 from backend.app.api.v1 import build
-from backend.app.api.v1 import test
 
 # Setup logging
 setup_logging(settings.log_level)
@@ -32,20 +33,39 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS
+# CORS - configured via CORS_ORIGINS env var, defaults to localhost in development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:4001"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# Validation error handler for debugging
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    body = None
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    logger.error(f"Validation error on {request.url.path}: {exc.errors()}")
+    logger.error(f"Request body was: {body}")
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": body,
+        },
+    )
+
+
 # Routes
 app.include_router(wallet.router, prefix="/api/v1", tags=["wallet"])
 app.include_router(transactions.router, prefix="/api/v1", tags=["transactions"])
-app.include_router(build.router, prefix="/api/v1/build", tags=["build"])
-app.include_router(test.router, prefix="/api/v1", tags=["test"])
+app.include_router(build.router, prefix="/api/v1", tags=["build"])
 
 @app.get("/")
 async def root():

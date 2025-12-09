@@ -1,9 +1,11 @@
 import redis.asyncio as redis
 import json
-from typing import Optional, Any
-from datetime import datetime, timedelta
-from functools import wraps
-import hashlib
+import logging
+from typing import Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
 
 class CacheService:
     def __init__(self, redis_url: str):
@@ -19,7 +21,7 @@ class CacheService:
             return None
         except Exception as e:
             # Fail gracefully - cache miss is better than crash
-            print(f"Cache get error: {e}")
+            logger.warning(f"Cache get error: {e}")
             return None
 
     async def set(self, key: str, value: dict, ttl: int = None) -> bool:
@@ -29,7 +31,7 @@ class CacheService:
             await self.redis.setex(key, ttl, json.dumps(value))
             return True
         except Exception as e:
-            print(f"Cache set error: {e}")
+            logger.warning(f"Cache set error: {e}")
             return False
 
     async def get_with_stale(self, key: str, stale_ttl: int = 3600) -> tuple[Optional[dict], bool]:

@@ -1,5 +1,5 @@
 import httpx
-from typing import Dict, Optional
+from typing import Optional
 import logging
 from datetime import datetime
 from backend.core.config import settings
@@ -26,6 +26,24 @@ TOKEN_MAPPING = {
     "0xf97f4df75117a78c1a5a0dbb814af92458539fb4": "chainlink",  # LINK on Arb
 }
 
+# Symbol to CoinGecko ID mapping (for GMX perp positions)
+SYMBOL_TO_COINGECKO = {
+    "ETH": "ethereum",
+    "WETH": "ethereum",
+    "BTC": "bitcoin",
+    "WBTC": "bitcoin",
+    "LINK": "chainlink",
+    "SOL": "solana",
+    "ARB": "arbitrum",
+    "DOGE": "dogecoin",
+    "PEPE": "pepe",
+    "NEAR": "near",
+    "SUI": "sui",
+    "XRP": "ripple",
+    "AAVE": "aave",
+    "GMX": "gmx",
+}
+
 
 class CoinGeckoService:
     def __init__(self):
@@ -34,7 +52,7 @@ class CoinGeckoService:
             headers={"x-cg-demo-api-key": settings.coingecko_api_key},
             timeout=30.0
         )
-        self._price_cache: Dict[str, float] = {}
+        self._price_cache: dict[str, float] = {}
 
     async def close(self):
         await self.client.aclose()
@@ -43,9 +61,56 @@ class CoinGeckoService:
         """Convert token address to CoinGecko ID"""
         return TOKEN_MAPPING.get(token_address.lower())
 
+    async def get_current_prices(self, symbols: list[str]) -> dict[str, float]:
+        """
+        Get current prices for multiple symbols.
+
+        Args:
+            symbols: List of token symbols (e.g., ["ETH", "LINK", "BTC"])
+
+        Returns:
+            Dict mapping symbol to USD price
+        """
+        # Convert symbols to CoinGecko IDs
+        coingecko_ids = []
+        symbol_to_id = {}
+        for symbol in symbols:
+            cg_id = SYMBOL_TO_COINGECKO.get(symbol.upper())
+            if cg_id:
+                coingecko_ids.append(cg_id)
+                symbol_to_id[cg_id] = symbol.upper()
+
+        if not coingecko_ids:
+            return {}
+
+        try:
+            response = await self.client.get(
+                "/simple/price",
+                params={
+                    "ids": ",".join(coingecko_ids),
+                    "vs_currencies": "usd"
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Map back to symbols
+            results = {}
+            for cg_id, price_data in data.items():
+                symbol = symbol_to_id.get(cg_id)
+                if symbol and "usd" in price_data:
+                    results[symbol] = price_data["usd"]
+                    logger.info(f"Current price for {symbol}: ${price_data['usd']}")
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching current prices: {e}")
+            return {}
+
     async def get_historical_price(
-        self, 
-        token_address: str, 
+        self,
+        token_address: str,
         timestamp: float
     ) -> Optional[float]:
         """
@@ -93,7 +158,7 @@ class CoinGeckoService:
         self,
         token_addresses: list[str],
         timestamp: float
-    ) -> Dict[str, float]:
+    ) -> dict[str, float]:
         """
         Get historical prices for multiple tokens at once
         

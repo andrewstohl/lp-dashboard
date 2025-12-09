@@ -11,7 +11,7 @@ Architecture:
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from typing import Dict, Any, List, Optional
+from typing import Any, Optional
 from datetime import datetime, timedelta
 import logging
 
@@ -46,7 +46,7 @@ async def get_wallet_transactions(
     ),
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(50, ge=1, le=200, description="Items per page")
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Discover all transactions for a wallet.
     
@@ -185,7 +185,7 @@ def _parse_date(date_str: str) -> datetime:
         raise ValueError(f"Invalid date format: {date_str}")
 
 
-def _build_summary(transactions: List[Dict]) -> Dict[str, Any]:
+def _build_summary(transactions: list[dict]) -> dict[str, Any]:
     """Build summary statistics from transactions"""
     by_chain = {}
     by_project = {}

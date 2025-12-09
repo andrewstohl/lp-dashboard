@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     backend_host: str = "0.0.0.0"
     backend_port: int = 8004
     environment: str = Field(default="development", description="dev/staging/production")
+    cors_origins: str = Field(
+        default="http://localhost:4001,http://localhost:3000",
+        description="Comma-separated list of allowed CORS origins"
+    )
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379", description="Redis connection URL")
@@ -31,6 +35,17 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parse comma-separated CORS origins into a list."""
+        if not self.cors_origins:
+            return []
+        origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+        # In development, allow all origins for convenience
+        if not self.is_production and "*" not in origins:
+            origins.append("*")
+        return origins
 
     class Config:
         env_file = ".env"

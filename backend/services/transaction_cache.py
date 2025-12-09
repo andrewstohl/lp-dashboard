@@ -12,7 +12,7 @@ import sqlite3
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -177,7 +177,7 @@ class TransactionCache:
             ).fetchone()
             return result[0] if result else 0
     
-    def save_transactions(self, transactions: List[Dict[str, Any]]):
+    def save_transactions(self, transactions: list[dict[str, Any]]):
         """Save transactions to cache (upsert)"""
         if not transactions:
             return
@@ -202,7 +202,7 @@ class TransactionCache:
         since_ts: Optional[int] = None,
         until_ts: Optional[int] = None,
         chain: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Load transactions from cache with optional filters"""
         query = "SELECT data FROM transactions WHERE 1=1"
         params = []
@@ -243,7 +243,7 @@ class TransactionCache:
             """, (tx_id, token_address.lower(), price_usd, value_usd))
             conn.commit()
     
-    def save_transaction_prices(self, tx_id: str, prices: Dict[str, Dict[str, float]]):
+    def save_transaction_prices(self, tx_id: str, prices: dict[str, dict[str, float]]):
         """
         Save multiple token prices for a transaction.
         
@@ -265,7 +265,7 @@ class TransactionCache:
                 ))
             conn.commit()
     
-    def get_transaction_prices(self, tx_id: str) -> Dict[str, Dict[str, float]]:
+    def get_transaction_prices(self, tx_id: str) -> dict[str, dict[str, float]]:
         """
         Get all cached prices for a transaction.
         
@@ -292,7 +292,7 @@ class TransactionCache:
             """, (tx_id,)).fetchone()
             return result[0] > 0 if result else False
     
-    def get_transactions_needing_prices(self) -> List[str]:
+    def get_transactions_needing_prices(self) -> list[str]:
         """Get list of transaction IDs that don't have cached prices"""
         with sqlite3.connect(self.db_path) as conn:
             results = conn.execute("""
@@ -308,7 +308,7 @@ class TransactionCache:
         since_ts: Optional[int] = None,
         until_ts: Optional[int] = None,
         chain: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Load transactions and merge in cached prices.
         
@@ -358,7 +358,7 @@ class TransactionCache:
             ).fetchone()
             return json.loads(result[0]) if result else None
 
-    def get_cache_stats(self) -> Dict[str, Any]:
+    def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics"""
         with sqlite3.connect(self.db_path) as conn:
             total = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
@@ -410,8 +410,8 @@ class TransactionCache:
         strategy_id: str,
         name: str, 
         description: Optional[str] = None,
-        positions: Optional[List[Dict[str, Any]]] = None
-    ) -> Dict[str, Any]:
+        positions: Optional[list[dict[str, Any]]] = None
+    ) -> dict[str, Any]:
         """
         Create a new strategy.
         
@@ -442,7 +442,7 @@ class TransactionCache:
         
         return self.get_strategy(strategy_id)
     
-    def get_strategy(self, strategy_id: str) -> Optional[Dict[str, Any]]:
+    def get_strategy(self, strategy_id: str) -> Optional[dict[str, Any]]:
         """Get a strategy by ID with its positions"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -474,7 +474,7 @@ class TransactionCache:
                 "updatedAt": row["updated_at"],
             }
     
-    def get_all_strategies(self) -> List[Dict[str, Any]]:
+    def get_all_strategies(self) -> list[dict[str, Any]]:
         """Get all strategies for this wallet"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -491,8 +491,8 @@ class TransactionCache:
         name: Optional[str] = None,
         description: Optional[str] = None,
         status: Optional[str] = None,
-        positions: Optional[List[Dict[str, Any]]] = None
-    ) -> Optional[Dict[str, Any]]:
+        positions: Optional[list[dict[str, Any]]] = None
+    ) -> Optional[dict[str, Any]]:
         """Update a strategy"""
         with sqlite3.connect(self.db_path) as conn:
             # Build update query dynamically
@@ -546,7 +546,7 @@ class TransactionCache:
         chain: str = "",
         protocol: str = "",
         position_type: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a new user-defined position"""
         import uuid
         position_id = str(uuid.uuid4())
@@ -560,7 +560,7 @@ class TransactionCache:
         
         return self.get_user_position(position_id)
     
-    def get_user_position(self, position_id: str) -> Optional[Dict[str, Any]]:
+    def get_user_position(self, position_id: str) -> Optional[dict[str, Any]]:
         """Get a single user position with its transactions"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -588,7 +588,7 @@ class TransactionCache:
             
             return position
     
-    def get_all_user_positions(self) -> List[Dict[str, Any]]:
+    def get_all_user_positions(self) -> list[dict[str, Any]]:
         """Get all user-created positions with their transaction IDs"""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -622,7 +622,7 @@ class TransactionCache:
         name: str = None,
         description: str = None,
         status: str = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """Update a user position"""
         updates = []
         params = []

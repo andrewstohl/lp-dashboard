@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, List
+from typing import Any
 import logging
 import os
 from backend.services.debank import get_debank_service, DeBankService
@@ -27,7 +27,7 @@ def get_gmx_subgraph_service() -> GMXSubgraphService:
 async def get_wallet_positions(
     address: str,
     service: DeBankService = Depends(get_debank_service)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get all positions for a wallet (uses DeBank for discovery)"""
     try:
         result = await service.get_wallet_positions(address)
@@ -50,7 +50,7 @@ async def get_wallet_ledger(
     coingecko: CoinGeckoService = Depends(get_coingecko_service),
     thegraph: TheGraphService = Depends(get_thegraph_service),
     gmx_subgraph: GMXSubgraphService = Depends(get_gmx_subgraph_service)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Get enriched ledger data for a wallet.
     
@@ -187,7 +187,7 @@ async def get_wallet_ledger(
 async def get_wallet_positions_raw(
     address: str,
     service: DeBankService = Depends(get_debank_service)
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get raw positions without processing (for debugging)"""
     try:
         return await service.get_wallet_positions(address)

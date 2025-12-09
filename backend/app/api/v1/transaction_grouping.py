@@ -6,7 +6,7 @@ Groups perp transactions by market/direction.
 Infers flow direction (INCREASE/DECREASE/OVERHEAD) from net value.
 """
 
-from typing import Dict, List, Any, Tuple, Optional
+from typing import Any, Optional
 from datetime import datetime
 from collections import defaultdict
 
@@ -18,7 +18,7 @@ def _is_nft_token(token_id: str, amount: float) -> bool:
     return amount == 1 and len(token_id) >= 20 and not token_id.startswith("0x")
 
 
-def _extract_nft_id(tx: Dict) -> Optional[str]:
+def _extract_nft_id(tx: dict) -> Optional[str]:
     """
     Extract NFT position ID from a transaction's receives.
     NFTs appear in MINT transactions with amount=1 and hash-like token_id.
@@ -31,7 +31,7 @@ def _extract_nft_id(tx: Dict) -> Optional[str]:
     return None
 
 
-def _get_pool_addresses(tx: Dict) -> List[str]:
+def _get_pool_addresses(tx: dict) -> list[str]:
     """
     Extract all pool addresses from a transaction.
     Pool addresses appear in to_addr (sends) and from_addr (receives).
@@ -65,7 +65,7 @@ def _is_lp_protocol(project_id: str) -> bool:
 
 # === Main Functions ===
 
-def infer_flow_direction(tx: Dict, token_dict: Dict) -> Tuple[str, float, float, float]:
+def infer_flow_direction(tx: dict, token_dict: dict) -> tuple[str, float, float, float]:
     """
     Infer the flow direction of a transaction based on net value.
     
@@ -107,7 +107,7 @@ def infer_flow_direction(tx: Dict, token_dict: Dict) -> Tuple[str, float, float,
     return direction, net_value, total_in, total_out
 
 
-def get_transaction_tokens(tx: Dict, token_dict: Dict) -> List[str]:
+def get_transaction_tokens(tx: dict, token_dict: dict) -> list[str]:
     """
     Get list of token symbols involved in a transaction (excluding NFTs).
     
@@ -156,7 +156,7 @@ def get_transaction_tokens(tx: Dict, token_dict: Dict) -> List[str]:
     return sorted(list(tokens))
 
 
-def infer_position_type(tx: Dict) -> str:
+def infer_position_type(tx: dict) -> str:
     """Infer position type from transaction characteristics."""
     tx_name = (tx.get("tx", {}).get("name") or "").lower()
     project_id = (tx.get("project_id") or "").lower()
@@ -186,10 +186,10 @@ def infer_position_type(tx: Dict) -> str:
 
 
 def group_transactions(
-    transactions: List[Dict],
-    token_dict: Dict,
-    project_dict: Dict
-) -> List[Dict]:
+    transactions: list[dict],
+    token_dict: dict,
+    project_dict: dict
+) -> list[dict]:
     """
     Group transactions intelligently:
     - LP positions: Group by NFT ID (extracted from mint), display token pair
@@ -203,7 +203,7 @@ def group_transactions(
     
     # === FIRST PASS: Build NFT position registry from MINT transactions ===
     # Maps pool_address -> list of {nft_id, tokens, chain, protocol, mint_time}
-    nft_positions: Dict[str, List[Dict]] = defaultdict(list)
+    nft_positions: dict[str, list[dict]] = defaultdict(list)
     
     for tx in transactions:
         project_id = tx.get("project_id") or ""
@@ -230,7 +230,7 @@ def group_transactions(
             })
     
     # === SECOND PASS: Group all transactions ===
-    groups: Dict[str, Dict] = {}
+    groups: dict[str, dict] = {}
     
     for tx in transactions:
         chain = tx.get("chain", "unknown")

@@ -1,748 +1,1468 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { Wallet, RefreshCw, Loader2, AlertCircle } from "lucide-react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { Wallet, Loader2, ChevronDown, ChevronRight, ChevronUp, ExternalLink, TrendingUp, TrendingDown, Plus, X, Layers, CheckSquare, Square, Edit2, RefreshCw, Save } from "lucide-react";
 import { Navigation } from "@/components/Navigation";
-import { TransactionsColumn } from "@/components/build/TransactionsColumn";
-import { PositionsColumn } from "@/components/build/PositionsColumn";
-import { StrategiesColumn } from "@/components/build/StrategiesColumn";
-import { CreateStrategyModal } from "@/components/build/CreateStrategyModal";
-import { CreatePositionModal } from "@/components/build/CreatePositionModal";
+
+// LocalStorage keys
+const STORAGE_KEYS = {
+  WALLET: "lp_dashboard_wallet",
+  POSITIONS: "lp_dashboard_positions",
+  STRATEGIES: "lp_dashboard_strategies",
+};
+
+interface CachedPositions {
+  wallet: string;
+  poolGroups: PoolGroup[];
+  gmxTrades: GMXTrade[];
+  timestamp: number;
+}
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8004";
 
-interface Transaction {
-  id: string;
-  chain: string;
-  time_at: number;
-  project_id?: string;
-  cate_id?: string;
-  tx?: {
-    name?: string;
-    hash?: string;
-  };
-  sends?: Array<{
-    token_id: string;
-    amount: number;
-  }>;
-  receives?: Array<{
-    token_id: string;
-    amount: number;
-  }>;
-  _flowDirection?: "INCREASE" | "DECREASE" | "OVERHEAD";
-  _netValue?: number;
-  _totalIn?: number;
-  _totalOut?: number;
+// LP Position Types
+interface LPTransaction {
+  timestamp: number;
+  block_number: number;
+  tx_hash: string;
+  action: string;
+  token0_amount: number;
+  token1_amount: number;
+  token0_symbol: string;
+  token1_symbol: string;
+  token0_price_usd: number;
+  token1_price_usd: number;
+  token0_value_usd: number;
+  token1_value_usd: number;
+  total_value_usd: number;
+  amount_source: string;
 }
 
-interface TransactionGroup {
-  groupKey: string;
-  chain: string;
-  protocol: string;
-  protocolName: string;
-  positionType: string;
-  tokens: string[];
-  tokensDisplay: string;
-  transactions: Transaction[];
-  transactionCount: number;
-  totalIn: number;
-  totalOut: number;
-  netValue: number;
-  latestActivity: number;
-  isOpen?: boolean;
-}
-
-interface TokenInfo {
-  symbol?: string;
-  optimized_symbol?: string;
-  name?: string;
-  price?: number;
-  logo_url?: string;
-  is_scam?: boolean;
-}
-
-interface Position {
-  id: string;
-  protocol: string;
-  protocolName: string;
-  chain: string;
-  type: string;
-  name: string;
-  displayName?: string;
-  positionIndex?: string;
-  valueUsd: number;
-  status: "open" | "closed";
-  transactionCount: number;
-  transactions?: Transaction[];
-  // Type-specific
-  side?: string;
-  leverage?: number;
-  pnlUsd?: number;
-  tokens?: Array<{
-    symbol: string;
+interface LPPositionHistory {
+  position_id: string;
+  status: string;
+  pool: {
     address: string;
-    amount: number;
-    price: number;
-    valueUsd: number;
-  }>;
-  totalRewardsUsd?: number;
+    fee_tier: number;
+    token0: { address: string; symbol: string; decimals: number };
+    token1: { address: string; symbol: string; decimals: number };
+  };
+  transactions: LPTransaction[];
+  summary: {
+    total_transactions: number;
+    total_deposited_usd: number;
+    total_withdrawn_usd: number;
+    total_fees_collected_usd: number;
+    net_invested_usd: number;
+  };
+  data_sources: {
+    structure: string;
+    amounts: string;
+    prices: string;
+    debank_coverage: string;
+  };
 }
+
+interface LPPosition {
+  position_id: string;
+  status: string;
+  liquidity: string;
+  deposited_token0: number;
+  deposited_token1: number;
+  mint_timestamp: number;
+}
+
+interface PoolGroup {
+  pool_address: string;
+  token0_symbol: string;
+  token1_symbol: string;
+  fee_tier: string;
+  chain_name: string;
+  positions: LPPosition[];
+}
+
+// GMX Trade Types (flat list - no position grouping)
+interface GMXTrade {
+  timestamp: number;
+  tx_hash: string;
+  position_key: string;
+  market_address: string;
+  market: string;  // Just "ETH", "BTC", etc.
+  market_name: string;  // "ETH/USD [1]", etc.
+  side: string;
+  is_long: boolean;
+  action: string;  // Open, Increase, Decrease, Close
+  size_delta_usd: number;
+  size_after_usd: number;
+  collateral_usd: number;  // For initial margin tracking
+  execution_price: number;
+  pnl_usd: number;
+  fees_usd: number;
+}
+
+interface GMXTradesSummary {
+  total_trades: number;
+  unique_markets: number;
+  long_trades: number;
+  short_trades: number;
+  total_pnl_usd: number;
+}
+
+// Strategy Types
+interface StrategyLPItem {
+  type: "lp";
+  position_id: string;
+  pool_address: string;
+  token0_symbol: string;
+  token1_symbol: string;
+  fee_tier: string;
+  status: string;
+}
+
+interface StrategyGMXTradeItem {
+  type: "gmx_trade";
+  tx_hash: string;
+  position_key: string;  // Groups trades into positions for aggregation
+  market: string;
+  market_address: string;
+  side: string;
+  action: string;
+  size_delta_usd: number;
+  collateral_usd: number;  // For initial margin tracking
+  execution_price: number;
+  pnl_usd: number;
+  timestamp: number;
+}
+
+type StrategyItem = StrategyLPItem | StrategyGMXTradeItem;
 
 interface Strategy {
   id: string;
   name: string;
-  description?: string;
-  status: "draft" | "open" | "closed";
-  positionIds: string[];
-  totalValueUsd: number;
-  totalPnlUsd?: number;
-  createdAt: number;
+  items: StrategyItem[];
+  created_at: number;
 }
 
-interface UserPosition {
-  id: string;
-  name: string;
-  description?: string;
-  chain?: string;
-  protocol?: string;
-  position_type?: string;
-  status: string;
-  transactionIds: string[];
-  transactionCount: number;
-  created_at: string;
-  updated_at: string;
-}
-
-interface BuildData {
-  transactions: Transaction[];
-  positions: Position[];
-  openPositions: Position[];
-  closedPositions: Position[];
-  unmatchedTransactions: Transaction[];
-  tokenDict: Record<string, TokenInfo>;
-  projectDict: Record<string, { name: string; logo_url?: string }>;
-  chainNames?: Record<string, string>;
-  summary: {
-    total: number;
-    totalUnfiltered?: number;
-    filtered?: number;
-    totalPositions: number;
-    openPositions: number;
-    closedPositions: number;
-    matchedTransactions: number;
-    unmatchedTransactions: number;
-    matchRate: string;
-    byCategory?: Record<string, number>;
-    byChain?: Record<string, number>;
-  };
-}
-
-const DEFAULT_CHAIN_NAMES: Record<string, string> = {
-  eth: "Ethereum",
-  arb: "Arbitrum",
-  op: "Optimism",
-  base: "Base",
-  matic: "Polygon",
-  bsc: "BNB Chain",
-};
-
-export default function BuildPage() {
-  const [walletAddress, setWalletAddress] = useState("");
-  const [inputValue, setInputValue] = useState("");
+export default function TestPage() {
+  const [walletAddress, setWalletAddress] = useState("0x23b50a703d3076b73584df48251931ebf5937ba2");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [data, setData] = useState<BuildData | null>(null);
-  const [transactionGroups, setTransactionGroups] = useState<TransactionGroup[]>([]);
-  const [positionFilter, setPositionFilter] = useState<"all" | "open" | "closed">("all");
-  
-  // Hidden transactions (persisted in localStorage)
-  const [hiddenTxIds, setHiddenTxIds] = useState<Set<string>>(new Set());
-  const [showHidden, setShowHidden] = useState(false);
-  
-  // Strategies (from API)
-  const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [showCreateStrategy, setShowCreateStrategy] = useState(false);
 
-  // User-created positions (from API)
-  const [userPositions, setUserPositions] = useState<UserPosition[]>([]);
-  const [showCreatePosition, setShowCreatePosition] = useState(false);
-  const [assignedTxIds, setAssignedTxIds] = useState<Set<string>>(new Set());
-  
-  // Load cached wallet and hidden transactions on mount
+  // LP State
+  const [poolGroups, setPoolGroups] = useState<PoolGroup[]>([]);
+  const [expandedLPPositions, setExpandedLPPositions] = useState<Set<string>>(new Set());
+  const [lpHistories, setLPHistories] = useState<Record<string, LPPositionHistory>>({});
+  const [loadingLPPositions, setLoadingLPPositions] = useState<Set<string>>(new Set());
+
+  // GMX State (flat trade list)
+  const [gmxTrades, setGMXTrades] = useState<GMXTrade[]>([]);
+  const [gmxSummary, setGMXSummary] = useState<GMXTradesSummary | null>(null);
+
+  // GMX Filters
+  const [gmxMarketFilter, setGMXMarketFilter] = useState<string>("all");
+  const [gmxSideFilter, setGMXSideFilter] = useState<string>("all");
+  const [gmxActionFilter, setGMXActionFilter] = useState<string>("all");
+  const [gmxSortField, setGMXSortField] = useState<string>("timestamp");
+  const [gmxSortDir, setGMXSortDir] = useState<"asc" | "desc">("desc");
+
+  // Strategy State
+  const [selectedLPPositions, setSelectedLPPositions] = useState<Set<string>>(new Set());
+  const [selectedGMXTrades, setSelectedGMXTrades] = useState<Set<string>>(new Set()); // "positionKey:txHash"
+  const [strategies, setStrategies] = useState<Strategy[]>([]);
+  const [newStrategyName, setNewStrategyName] = useState("");
+
+  // Section collapse state
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(["strategies", "lp", "perp"]));
+  const [expandedPools, setExpandedPools] = useState<Set<string>>(new Set());
+  // Active strategy ID: null = creating new, string = editing existing
+  const [activeStrategyId, setActiveStrategyId] = useState<string | null>(null);
+  const [isAutoLoading, setIsAutoLoading] = useState(false);
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+
+  // Ref to track if we've completed initial load from localStorage
+  const hasLoadedFromStorage = useRef(false);
+
+  // Load strategies from localStorage on mount
   useEffect(() => {
-    const cached = localStorage.getItem("vora_wallet_address");
-    if (cached) {
-      setWalletAddress(cached);
-      setInputValue(cached);
-      
-      // Load hidden transactions for this wallet
-      const hiddenKey = `vora_hidden_txs_${cached.toLowerCase()}`;
-      const hiddenData = localStorage.getItem(hiddenKey);
-      if (hiddenData) {
-        try {
-          setHiddenTxIds(new Set(JSON.parse(hiddenData)));
-        } catch (e) {
-          console.error("Failed to load hidden transactions:", e);
+    try {
+      const savedStrategies = localStorage.getItem(STORAGE_KEYS.STRATEGIES);
+      if (savedStrategies) {
+        const parsed = JSON.parse(savedStrategies);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setStrategies(parsed);
+        }
+      }
+      const savedWallet = localStorage.getItem(STORAGE_KEYS.WALLET);
+      if (savedWallet) {
+        setWalletAddress(savedWallet);
+      }
+    } catch (e) {
+      console.error("Error loading from localStorage:", e);
+    }
+    // Mark that we've completed loading
+    hasLoadedFromStorage.current = true;
+  }, []);
+
+  // Save strategies to localStorage whenever they change (skip initial mount)
+  useEffect(() => {
+    // Don't save on initial mount - wait until we've loaded first
+    if (!hasLoadedFromStorage.current) {
+      return;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEYS.STRATEGIES, JSON.stringify(strategies));
+    } catch (e) {
+      console.error("Error saving strategies:", e);
+    }
+  }, [strategies]);
+
+  // Save wallet address to localStorage when it changes
+  useEffect(() => {
+    if (walletAddress) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.WALLET, walletAddress);
+      } catch (e) {
+        console.error("Error saving wallet:", e);
+      }
+    }
+  }, [walletAddress]);
+
+  // Auto-load positions from cache or fetch fresh on mount
+  useEffect(() => {
+    const autoLoad = async () => {
+      if (!walletAddress) return;
+
+      try {
+        // Check for cached positions
+        const cached = localStorage.getItem(STORAGE_KEYS.POSITIONS);
+        if (cached) {
+          const parsed: CachedPositions = JSON.parse(cached);
+          if (parsed.wallet.toLowerCase() === walletAddress.toLowerCase()) {
+            // Use cached data
+            setPoolGroups(parsed.poolGroups);
+            setGMXTrades(parsed.gmxTrades || []);
+            setCacheTimestamp(parsed.timestamp);
+            return;
+          }
+        }
+
+        // No cache or different wallet - fetch fresh
+        setIsAutoLoading(true);
+        await handleLoadInternal();
+      } catch (e) {
+        console.error("Error in auto-load:", e);
+      } finally {
+        setIsAutoLoading(false);
+      }
+    };
+
+    autoLoad();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Compute position-to-strategy mapping for badges
+  const positionStrategyMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+
+    for (const strategy of strategies) {
+      for (const item of strategy.items) {
+        if (item.type === "lp") {
+          const key = item.position_id;
+          if (!map[key]) map[key] = [];
+          if (!map[key].includes(strategy.name)) map[key].push(strategy.name);
+        } else if (item.type === "gmx_trade") {
+          const key = item.tx_hash;
+          if (!map[key]) map[key] = [];
+          if (!map[key].includes(strategy.name)) map[key].push(strategy.name);
         }
       }
     }
-  }, []);
 
-  // Fetch data when wallet changes
-  const fetchData = useCallback(async (address: string) => {
-    if (!address) return;
-    
-    setLoading(true);
+    return map;
+  }, [strategies]);
+
+  const toggleSection = (section: string) => {
+    const newExpanded = new Set(expandedSections);
+    if (newExpanded.has(section)) {
+      newExpanded.delete(section);
+    } else {
+      newExpanded.add(section);
+    }
+    setExpandedSections(newExpanded);
+  };
+
+  const togglePool = (poolAddress: string) => {
+    const newExpanded = new Set(expandedPools);
+    if (newExpanded.has(poolAddress)) {
+      newExpanded.delete(poolAddress);
+    } else {
+      newExpanded.add(poolAddress);
+    }
+    setExpandedPools(newExpanded);
+  };
+
+  // Internal load function (used by both auto-load and manual refresh)
+  const handleLoadInternal = async () => {
+    if (!walletAddress) return;
+
     setError(null);
-    
+    setExpandedLPPositions(new Set());
+    setLPHistories({});
+    setSelectedLPPositions(new Set());
+    setSelectedGMXTrades(new Set());
+
     try {
-      // Fetch grouped transactions
-      const groupedResponse = await fetch(
-        `${API_URL}/api/v1/build/transactions/grouped?wallet=${address}&since=6m`
-      );
-      
-      if (!groupedResponse.ok) {
-        throw new Error(`API error: ${groupedResponse.status}`);
+      // Fetch LP positions and GMX trades in parallel
+      const [lpResponse, gmxResponse] = await Promise.all([
+        fetch(`${API_URL}/api/v1/build/uniswap-lp?wallet=${walletAddress}`),
+        fetch(`${API_URL}/api/v1/build/gmx-trades?wallet=${walletAddress}`)
+      ]);
+
+      if (!lpResponse.ok) {
+        throw new Error(`LP API error: ${lpResponse.status}`);
       }
-      
-      const groupedResult = await groupedResponse.json();
-      
-      if (groupedResult.status === "success") {
-        setTransactionGroups(groupedResult.data.groups || []);
-        
-        // Set basic data for token dict and project dict
-        setData({
-          transactions: [],
-          positions: [],
-          openPositions: [],
-          closedPositions: [],
-          unmatchedTransactions: [],
-          tokenDict: groupedResult.data.tokenDict || {},
-          projectDict: groupedResult.data.projectDict || {},
-          summary: {
-            total: groupedResult.data.totalTransactions || 0,
-            totalPositions: 0,
-            openPositions: 0,
-            closedPositions: 0,
-            matchedTransactions: 0,
-            unmatchedTransactions: groupedResult.data.totalTransactions || 0,
-            matchRate: "0%",
-          }
-        });
-      } else {
-        throw new Error(groupedResult.detail?.error || "Failed to fetch data");
+      if (!gmxResponse.ok) {
+        throw new Error(`GMX API error: ${gmxResponse.status}`);
       }
+
+      const [lpResult, gmxResult] = await Promise.all([
+        lpResponse.json(),
+        gmxResponse.json()
+      ]);
+
+      const newPoolGroups = lpResult.status === "success" ? (lpResult.data.pools || []) : [];
+      const newGMXTrades = gmxResult.status === "success" ? (gmxResult.data.trades || []) : [];
+      const newGMXSummary = gmxResult.status === "success" ? gmxResult.data.summary : null;
+
+      setPoolGroups(newPoolGroups);
+      setGMXTrades(newGMXTrades);
+      setGMXSummary(newGMXSummary);
+
+      // Save to cache
+      const cacheData: CachedPositions = {
+        wallet: walletAddress,
+        poolGroups: newPoolGroups,
+        gmxTrades: newGMXTrades,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem(STORAGE_KEYS.POSITIONS, JSON.stringify(cacheData));
+      setCacheTimestamp(cacheData.timestamp);
+
     } catch (err) {
       console.error("Error fetching data:", err);
       setError(err instanceof Error ? err.message : "Failed to fetch data");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  // Auto-fetch when wallet address is set
-  useEffect(() => {
-    if (walletAddress) {
-      fetchData(walletAddress);
-    }
-  }, [walletAddress, fetchData]);
-
-  const handleLoadWallet = () => {
-    if (!inputValue.trim()) return;
-    const address = inputValue.trim().toLowerCase();
-    setWalletAddress(address);
-    localStorage.setItem("vora_wallet_address", address);
-  };
-
-  const handleRefresh = () => {
-    if (walletAddress) {
-      fetchData(walletAddress);
     }
   };
 
-  // Transaction hiding handlers
-  const handleHideTransaction = (txId: string) => {
-    setHiddenTxIds((prev) => {
-      const next = new Set(prev);
-      next.add(txId);
-      // Persist to localStorage
-      const hiddenKey = `vora_hidden_txs_${walletAddress.toLowerCase()}`;
-      localStorage.setItem(hiddenKey, JSON.stringify([...next]));
-      return next;
-    });
+  // Manual refresh (clears and reloads)
+  const handleRefresh = async () => {
+    if (!walletAddress) return;
+    setLoading(true);
+    setPoolGroups([]);
+    setGMXTrades([]);
+    setGMXSummary(null);
+    await handleLoadInternal();
+    setLoading(false);
   };
 
-  const handleUnhideTransaction = (txId: string) => {
-    setHiddenTxIds((prev) => {
-      const next = new Set(prev);
-      next.delete(txId);
-      // Persist to localStorage
-      const hiddenKey = `vora_hidden_txs_${walletAddress.toLowerCase()}`;
-      localStorage.setItem(hiddenKey, JSON.stringify([...next]));
-      return next;
-    });
-  };
+  const toggleLPPosition = async (positionId: string) => {
+    const newExpanded = new Set(expandedLPPositions);
 
-  const handleToggleShowHidden = () => {
-    setShowHidden((prev) => !prev);
-  };
+    if (newExpanded.has(positionId)) {
+      newExpanded.delete(positionId);
+    } else {
+      newExpanded.add(positionId);
 
-  // Position editing handlers (for future implementation)
-  const handleAddToPosition = (txId: string, positionId: string) => {
-    console.log(`TODO: Add transaction ${txId} to position ${positionId}`);
-    // This would require backend support to persist custom transaction-position mappings
-  };
+      if (!lpHistories[positionId]) {
+        setLoadingLPPositions(prev => new Set(prev).add(positionId));
 
-  const handleRemoveFromPosition = (positionId: string, txId: string) => {
-    console.log(`TODO: Remove transaction ${txId} from position ${positionId}`);
-    // This would require backend support to persist custom transaction-position mappings
-  };
+        try {
+          const response = await fetch(
+            `${API_URL}/api/v1/build/position-history/${positionId}?wallet=${walletAddress}`
+          );
+          const result = await response.json();
 
-  const handleRenamePosition = (positionId: string, newName: string) => {
-    console.log(`TODO: Rename position ${positionId} to ${newName}`);
-    // This would require backend support to persist custom position names
-  };
-
-  const handleCreateStrategy = () => {
-    setShowCreateStrategy(true);
-  };
-
-  const handleStrategySubmit = async (strategyData: {
-    name: string;
-    description?: string;
-    positions: Array<{ positionId: string; percentage: number }>;
-  }) => {
-    try {
-      // Create strategy via API
-      const response = await fetch(
-        `${API_URL}/api/v1/build/strategies?wallet=${walletAddress}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: strategyData.name,
-            description: strategyData.description,
-            positions: strategyData.positions,
-          }),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(`Failed to create strategy: ${response.status}`);
-      }
-
-      // Refresh strategies from API
-      await fetchStrategies(walletAddress);
-    } catch (err) {
-      console.error("Error creating strategy:", err);
-      setError(err instanceof Error ? err.message : "Failed to create strategy");
-    }
-  };
-
-  // Fetch strategies from API
-  const fetchStrategies = useCallback(async (address: string) => {
-    if (!address) return;
-    
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/strategies?wallet=${address}`
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch strategies: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      
-      if (result.status === "success") {
-        // Transform API response to match frontend Strategy interface
-        const apiStrategies = (result.data.strategies || []).map((s: any) => ({
-          id: s.id,
-          name: s.name,
-          description: s.description,
-          status: s.status as "draft" | "open" | "closed",
-          positionIds: s.positionIds || [],
-          totalValueUsd: 0, // Will be calculated below
-          totalPnlUsd: undefined,
-          createdAt: new Date(s.createdAt).getTime(),
-        }));
-        
-        // Calculate total value for each strategy based on current positions
-        if (data?.positions) {
-          apiStrategies.forEach((strat: Strategy) => {
-            strat.totalValueUsd = strat.positionIds.reduce((sum: number, posId: string) => {
-              const pos = data.positions.find((p) => p.id === posId);
-              return sum + (pos?.valueUsd || 0);
-            }, 0);
-            
-            // Update status based on positions
-            const hasOpenPosition = strat.positionIds.some((posId: string) => {
-              const pos = data.positions.find((p) => p.id === posId);
-              return pos?.status === "open";
-            });
-            strat.status = hasOpenPosition ? "open" : (strat.positionIds.length > 0 ? "closed" : "draft");
+          if (result.status === "success") {
+            setLPHistories(prev => ({ ...prev, [positionId]: result.data }));
+          }
+        } catch (err) {
+          console.error("Error fetching LP position history:", err);
+        } finally {
+          setLoadingLPPositions(prev => {
+            const next = new Set(prev);
+            next.delete(positionId);
+            return next;
           });
         }
-        
-        setStrategies(apiStrategies);
       }
-    } catch (err) {
-      console.error("Error fetching strategies:", err);
-      // Don't set error state - strategies are optional
     }
-  }, [data?.positions]);
 
-  // Load strategies when wallet changes or data loads
-  useEffect(() => {
-    if (walletAddress) {
-      fetchStrategies(walletAddress);
-    }
-  }, [walletAddress, fetchStrategies]);
+    setExpandedLPPositions(newExpanded);
+  };
 
-  // Fetch user positions from API
-  const fetchUserPositions = useCallback(async (address: string) => {
-    if (!address) return;
-    
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/user-positions?wallet=${address}`
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch positions: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      
-      if (result.status === "success") {
-        setUserPositions(result.data.positions || []);
-        
-        // Collect all assigned transaction IDs
-        const assigned = new Set<string>();
-        (result.data.positions || []).forEach((pos: UserPosition) => {
-          (pos.transactionIds || []).forEach((txId: string) => assigned.add(txId));
-        });
-        setAssignedTxIds(assigned);
-      }
-    } catch (err) {
-      console.error("Error fetching user positions:", err);
-    }
-  }, []);
-
-  // Load user positions when wallet changes
-  useEffect(() => {
-    if (walletAddress) {
-      fetchUserPositions(walletAddress);
-    }
-  }, [walletAddress, fetchUserPositions]);
-
-  // Build transaction lookup map from all transaction groups
-  const transactionLookup = useMemo(() => {
-    const lookup = new Map<string, Transaction>();
-    transactionGroups.forEach(group => {
-      group.transactions.forEach(tx => {
-        lookup.set(tx.id, tx);
-      });
+  const formatDate = (ts: number) => {
+    return new Date(ts * 1000).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     });
-    return lookup;
-  }, [transactionGroups]);
+  };
 
-  // Create user position
-  const handleCreatePosition = async (posData: { name: string; description: string }) => {
-    try {
-      const params = new URLSearchParams({
-        wallet: walletAddress,
-        name: posData.name,
-        description: posData.description,
-      });
-      
-      const response = await fetch(
-        `${API_URL}/api/v1/build/user-positions?${params}`,
-        { method: "POST" }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to create position: ${response.status}`);
-      }
-      
-      await fetchUserPositions(walletAddress);
-    } catch (err) {
-      console.error("Error creating position:", err);
-      setError(err instanceof Error ? err.message : "Failed to create position");
+  const formatUSD = (value: number) => {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  };
+
+  const formatAmount = (value: number, decimals: number = 4) => {
+    if (value === 0) return "0";
+    if (Math.abs(value) < 0.0001) return "<0.0001";
+    return value.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: decimals,
+    });
+  };
+
+  const formatPrice = (value: number) => {
+    if (value === 0) return "$0";
+    if (value < 0.01) return `$${value.toExponential(2)}`;
+    return formatUSD(value);
+  };
+
+  const getLPActionColor = (action: string) => {
+    switch (action) {
+      case "Deposit": return "text-[#3FB950]";
+      case "Withdraw": return "text-[#F85149]";
+      case "Collect": return "text-[#A371F7]";
+      default: return "text-[#8B949E]";
     }
   };
 
-  // Add transaction to position
-  const handleAddTransactionToPosition = async (positionId: string, transactionId: string) => {
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/user-positions/${positionId}/transactions/${transactionId}?wallet=${walletAddress}`,
-        { method: "POST" }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to add transaction: ${response.status}`);
-      }
-      
-      await fetchUserPositions(walletAddress);
-    } catch (err) {
-      console.error("Error adding transaction:", err);
+  const getGMXActionColor = (action: string) => {
+    switch (action) {
+      case "Open":
+      case "Increase": return "text-[#3FB950]";
+      case "Close":
+      case "Decrease": return "text-[#F85149]";
+      default: return "text-[#8B949E]";
     }
   };
 
-  // Remove transaction from position
-  const handleRemoveTransactionFromPosition = async (positionId: string, transactionId: string) => {
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/user-positions/${positionId}/transactions/${transactionId}?wallet=${walletAddress}`,
-        { method: "DELETE" }
-      );
-      
-      if (!response.ok) {
-        throw new Error(`Failed to remove transaction: ${response.status}`);
+  // Strategy helpers
+  const toggleLPSelection = (positionId: string) => {
+    const newSelected = new Set(selectedLPPositions);
+    if (newSelected.has(positionId)) {
+      newSelected.delete(positionId);
+    } else {
+      newSelected.add(positionId);
+    }
+    setSelectedLPPositions(newSelected);
+  };
+
+  const toggleGMXTradeSelection = (txHash: string) => {
+    const newSelected = new Set(selectedGMXTrades);
+    if (newSelected.has(txHash)) {
+      newSelected.delete(txHash);
+    } else {
+      newSelected.add(txHash);
+    }
+    setSelectedGMXTrades(newSelected);
+  };
+
+  // Build items array from current selections
+  const buildItemsFromSelections = (): StrategyItem[] => {
+    const items: StrategyItem[] = [];
+
+    // Add selected LP positions
+    for (const pool of poolGroups) {
+      for (const pos of pool.positions) {
+        if (selectedLPPositions.has(pos.position_id)) {
+          items.push({
+            type: "lp",
+            position_id: pos.position_id,
+            pool_address: pool.pool_address,
+            token0_symbol: pool.token0_symbol,
+            token1_symbol: pool.token1_symbol,
+            fee_tier: pool.fee_tier,
+            status: pos.status,
+          });
+        }
       }
-      
-      await fetchUserPositions(walletAddress);
-    } catch (err) {
-      console.error("Error removing transaction:", err);
+    }
+
+    // Add selected GMX trades from flat list
+    for (const txHash of Array.from(selectedGMXTrades)) {
+      const trade = gmxTrades.find(t => t.tx_hash === txHash);
+      if (trade) {
+        items.push({
+          type: "gmx_trade",
+          tx_hash: trade.tx_hash,
+          position_key: trade.position_key,
+          market: trade.market,
+          market_address: trade.market_address,
+          side: trade.side,
+          action: trade.action,
+          size_delta_usd: trade.size_delta_usd,
+          collateral_usd: trade.collateral_usd || 0,
+          execution_price: trade.execution_price,
+          pnl_usd: trade.pnl_usd,
+          timestamp: trade.timestamp,
+        });
+      }
+    }
+
+    return items;
+  };
+
+  // Save strategy (creates new or updates existing based on activeStrategyId)
+  const saveStrategy = () => {
+    if (!newStrategyName.trim()) return;
+    const items = buildItemsFromSelections();
+    if (items.length === 0) return;
+
+    if (activeStrategyId) {
+      // Update existing strategy
+      setStrategies(prev => prev.map(s => {
+        if (s.id !== activeStrategyId) return s;
+        return { ...s, name: newStrategyName.trim(), items };
+      }));
+    } else {
+      // Create new strategy
+      const newStrategy: Strategy = {
+        id: `strategy-${Date.now()}`,
+        name: newStrategyName.trim(),
+        items,
+        created_at: Date.now(),
+      };
+      setStrategies(prev => [...prev, newStrategy]);
+    }
+
+    // Clear state
+    setNewStrategyName("");
+    setSelectedLPPositions(new Set());
+    setSelectedGMXTrades(new Set());
+    setActiveStrategyId(null);
+  };
+
+  // Start editing a strategy - load its items into selection state
+  const startEditingStrategy = (strategyId: string) => {
+    const strategy = strategies.find(s => s.id === strategyId);
+    if (!strategy) return;
+
+    // Load strategy name
+    setNewStrategyName(strategy.name);
+
+    // Load items into selection state
+    const lpPositions = new Set<string>();
+    const gmxTradesSet = new Set<string>();
+
+    for (const item of strategy.items) {
+      if (item.type === "lp") {
+        lpPositions.add(item.position_id);
+      } else if (item.type === "gmx_trade") {
+        gmxTradesSet.add(item.tx_hash);
+      }
+    }
+
+    setSelectedLPPositions(lpPositions);
+    setSelectedGMXTrades(gmxTradesSet);
+    setActiveStrategyId(strategyId);
+  };
+
+  // Cancel editing - clear all state
+  const cancelEditing = () => {
+    setNewStrategyName("");
+    setSelectedLPPositions(new Set());
+    setSelectedGMXTrades(new Set());
+    setActiveStrategyId(null);
+  };
+
+  const removeStrategy = (strategyId: string) => {
+    setStrategies(prev => prev.filter(s => s.id !== strategyId));
+    if (activeStrategyId === strategyId) {
+      cancelEditing();
     }
   };
 
-  const handleDeleteStrategy = async (strategyId: string) => {
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/build/strategies/${strategyId}?wallet=${walletAddress}`,
-        { method: "DELETE" }
-      );
+  // Stats
+  const totalLPPositions = poolGroups.reduce((sum, pool) => sum + pool.positions.length, 0);
+  const activeLPPositions = poolGroups.reduce(
+    (sum, pool) => sum + pool.positions.filter(p => p.status === "ACTIVE").length,
+    0
+  );
+  const totalGMXTrades = gmxTrades.length;
+  const totalGMXPnL = gmxSummary?.total_pnl_usd ?? gmxTrades.reduce((sum, t) => sum + t.pnl_usd, 0);
 
-      if (!response.ok) {
-        throw new Error(`Failed to delete strategy: ${response.status}`);
+  // Get unique markets for filter dropdown
+  const uniqueMarkets = useMemo(() => {
+    const markets = new Set(gmxTrades.map(t => t.market));
+    return Array.from(markets).sort();
+  }, [gmxTrades]);
+
+  // Filter and sort GMX trades
+  const filteredGMXTrades = useMemo(() => {
+    let filtered = gmxTrades;
+
+    // Apply filters
+    if (gmxMarketFilter !== "all") {
+      filtered = filtered.filter(t => t.market === gmxMarketFilter);
+    }
+    if (gmxSideFilter !== "all") {
+      filtered = filtered.filter(t => t.side === gmxSideFilter);
+    }
+    if (gmxActionFilter !== "all") {
+      filtered = filtered.filter(t => t.action === gmxActionFilter);
+    }
+
+    // Apply sorting
+    const sorted = [...filtered].sort((a, b) => {
+      let aVal: number | string = 0;
+      let bVal: number | string = 0;
+
+      switch (gmxSortField) {
+        case "timestamp":
+          aVal = a.timestamp;
+          bVal = b.timestamp;
+          break;
+        case "market":
+          aVal = a.market;
+          bVal = b.market;
+          break;
+        case "size":
+          aVal = a.size_delta_usd;
+          bVal = b.size_delta_usd;
+          break;
+        case "price":
+          aVal = a.execution_price;
+          bVal = b.execution_price;
+          break;
+        case "pnl":
+          aVal = a.pnl_usd;
+          bVal = b.pnl_usd;
+          break;
+        default:
+          aVal = a.timestamp;
+          bVal = b.timestamp;
       }
 
-      // Remove from local state
-      setStrategies((prev) => prev.filter((s) => s.id !== strategyId));
-    } catch (err) {
-      console.error("Error deleting strategy:", err);
-      setError(err instanceof Error ? err.message : "Failed to delete strategy");
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return gmxSortDir === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      }
+      return gmxSortDir === "asc" ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+    });
+
+    return sorted;
+  }, [gmxTrades, gmxMarketFilter, gmxSideFilter, gmxActionFilter, gmxSortField, gmxSortDir]);
+
+  // Toggle sort
+  const toggleGMXSort = (field: string) => {
+    if (gmxSortField === field) {
+      setGMXSortDir(gmxSortDir === "asc" ? "desc" : "asc");
+    } else {
+      setGMXSortField(field);
+      setGMXSortDir("desc");
     }
   };
-
-  // Get chain names from data or use defaults
-  const chainNames = data?.chainNames || DEFAULT_CHAIN_NAMES;
 
   return (
     <div className="min-h-screen bg-[#0D1117]">
-      {/* Header */}
-      <header className="border-b border-[#30363D] bg-[#161B22]">
-        <div className="max-w-[1800px] mx-auto px-6 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-8">
-              <h1 className="text-xl font-bold text-[#E6EDF3]">VORA</h1>
-              <Navigation />
-            </div>
-            {/* Wallet Input */}
-            <div className="flex items-center gap-3">
+      <Navigation />
+
+      <div className="container mx-auto px-4 py-8">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold text-[#E6EDF3] mb-2">
+            Strategy Builder
+          </h1>
+          <p className="text-[#8B949E]">
+            Build strategies by selecting LP positions (Uniswap V3) and Perp trades (GMX V2)
+          </p>
+        </div>
+
+        {/* Wallet Input */}
+        <div className="bg-[#161B22] rounded-xl border border-[#30363D] p-6 mb-6">
+          <div className="flex gap-4">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-[#8B949E] mb-2">
+                Wallet Address
+              </label>
               <div className="relative">
-                <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8B949E]" />
+                <Wallet className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8B949E]" />
                 <input
                   type="text"
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleLoadWallet()}
-                  placeholder="Enter wallet address..."
-                  className="w-[420px] pl-10 pr-4 py-2 bg-[#0D1117] border border-[#30363D] rounded-lg text-[#E6EDF3] placeholder-[#8B949E] focus:outline-none focus:border-[#58A6FF]"
+                  value={walletAddress}
+                  onChange={(e) => setWalletAddress(e.target.value)}
+                  placeholder="0x..."
+                  className="w-full pl-10 pr-4 py-2 bg-[#0D1117] border border-[#30363D] rounded-lg text-[#E6EDF3] placeholder-[#8B949E] focus:outline-none focus:ring-2 focus:ring-[#58A6FF]"
                 />
               </div>
+            </div>
+            <div className="flex items-end gap-3">
+              {/* Cache status indicator */}
+              {cacheTimestamp && (
+                <div className="text-xs text-[#8B949E] pb-2">
+                  Cached: {formatDate(cacheTimestamp / 1000)}
+                </div>
+              )}
+              {isAutoLoading && (
+                <div className="flex items-center gap-2 text-[#58A6FF] pb-2">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-xs">Loading...</span>
+                </div>
+              )}
               <button
-                onClick={handleLoadWallet}
-                disabled={loading || !inputValue.trim()}
-                className="flex items-center gap-2 px-4 py-2 bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white rounded-lg font-medium transition-colors"
+                onClick={handleRefresh}
+                disabled={loading || isAutoLoading || !walletAddress}
+                className="px-6 py-2 bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white font-medium rounded-lg transition-colors flex items-center gap-2"
               >
                 {loading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 ) : (
-                  <RefreshCw className="w-4 h-4" />
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Refresh
+                  </>
                 )}
-                Load
               </button>
-              {data && (
-                <button
-                  onClick={handleRefresh}
-                  disabled={loading}
-                  className="p-2 text-[#8B949E] hover:text-[#E6EDF3] hover:bg-[#21262D] rounded-lg transition-colors"
-                  title="Refresh data"
-                >
-                  <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-                </button>
-              )}
             </div>
           </div>
         </div>
-      </header>
 
-      {/* Summary Bar */}
-      {data && !loading && (
-        <div className="border-b border-[#30363D] bg-[#161B22]/50">
-          <div className="max-w-[1800px] mx-auto px-6 py-2">
-            <div className="flex items-center gap-6 text-sm">
-              <span className="text-[#8B949E]">
-                <span className="text-[#E6EDF3] font-medium">{transactionGroups.length}</span> groups
-              </span>
-              <span className="text-[#8B949E]">
-                <span className="text-[#E6EDF3] font-medium">
-                  {transactionGroups.reduce((sum, g) => sum + g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length, 0)}
-                </span> unassigned txs
-              </span>
-              <span className="text-[#30363D]">|</span>
-              <span className="text-[#8B949E]">
-                <span className="text-[#3FB950] font-medium">{userPositions.length}</span> positions
-              </span>
-              <span className="text-[#8B949E]">
-                <span className="text-[#58A6FF] font-medium">{assignedTxIds.size}</span> assigned txs
-              </span>
-              <span className="text-[#30363D]">|</span>
-              <span className="text-[#8B949E]">
-                <span className="text-[#A371F7] font-medium">{strategies.length}</span> strategies
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Main Content */}
-      <main className="max-w-[1800px] mx-auto px-6 py-6">
         {/* Error Display */}
         {error && (
-          <div className="mb-4 p-4 bg-[#F8514933] border border-[#F85149] rounded-lg flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-[#F85149]" />
-            <span className="text-[#F85149]">{error}</span>
+          <div className="bg-[#161B22] border border-[#F85149] rounded-xl p-4 mb-6">
+            <p className="text-[#F85149]">{error}</p>
           </div>
         )}
 
-        {!walletAddress ? (
-          /* Empty State - No Wallet */
-          <div className="flex items-center justify-center h-[600px]">
-            <div className="text-center">
-              <Wallet className="w-16 h-16 text-[#30363D] mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-[#E6EDF3] mb-2">
-                Enter Wallet Address to Begin
-              </h2>
-              <p className="text-[#8B949E]">
-                Build your portfolio by organizing transactions into positions and strategies
-              </p>
-            </div>
-          </div>
-        ) : loading && !data ? (
-          /* Initial Loading State */
-          <div className="flex items-center justify-center h-[600px]">
-            <div className="text-center">
-              <Loader2 className="w-12 h-12 text-[#58A6FF] mx-auto mb-4 animate-spin" />
-              <h2 className="text-xl font-semibold text-[#E6EDF3] mb-2">
-                Loading Portfolio...
-              </h2>
-              <p className="text-[#8B949E]">
-                Fetching transactions and positions from DeBank
-              </p>
-            </div>
-          </div>
-        ) : (
-          /* Three Column Grid */
-          <div className="grid grid-cols-3 gap-6 h-[calc(100vh-220px)]">
-            {/* Column 1: Transaction Groups */}
-            <TransactionsColumn
-              groups={transactionGroups.map(g => ({
-                ...g,
-                transactions: g.transactions.filter(tx => !assignedTxIds.has(tx.id)),
-                transactionCount: g.transactions.filter(tx => !assignedTxIds.has(tx.id)).length
-              })).filter(g => g.transactionCount > 0)}
-              tokenDict={data?.tokenDict || {}}
-              chainNames={chainNames}
-              isLoading={loading}
-              onDragStart={(txId, groupKey) => console.log('Drag started:', txId)}
-            />
+        {/* Full-Width Stacked Sections */}
+        {(poolGroups.length > 0 || gmxTrades.length > 0) && (
+          <div className="space-y-6">
 
-            {/* Column 2: User Positions */}
-            <PositionsColumn
-              positions={userPositions.map(up => {
-                // Get transactions for this position
-                const txs = (up.transactionIds || [])
-                  .map(txId => transactionLookup.get(txId))
-                  .filter((tx): tx is Transaction => tx !== undefined);
-                
-                // Calculate position value from historical transaction values
-                // valueUsd = total cost basis (sum of what was sent out at historical prices)
-                const valueUsd = txs.reduce((sum, tx) => sum + (tx._totalOut || 0), 0);
-                
-                return {
-                  id: up.id,
-                  protocol: up.protocol || "",
-                  protocolName: up.protocol || "Custom",
-                  chain: up.chain || "",
-                  type: up.position_type || "custom",
-                  name: up.name,
-                  displayName: up.name,
-                  valueUsd,
-                  status: up.status as "open" | "closed",
-                  transactionCount: up.transactionCount,
-                  transactions: txs
-                };
-              })}
-              tokenDict={data?.tokenDict || {}}
-              chainNames={chainNames}
-              filter={positionFilter}
-              onFilterChange={setPositionFilter}
-              onRemoveTransaction={handleRemoveTransactionFromPosition}
-              onRenamePosition={handleRenamePosition}
-              onCreatePosition={() => setShowCreatePosition(true)}
-              onDropTransaction={handleAddTransactionToPosition}
-              isLoading={loading}
-            />
+            {/* ======================================== */}
+            {/* SECTION 1: STRATEGIES (Top) */}
+            {/* ======================================== */}
+            <div className="bg-[#161B22] rounded-xl border border-[#30363D] overflow-hidden">
+              {/* Section Header - Clickable to collapse */}
+              <button
+                onClick={() => toggleSection("strategies")}
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  <Layers className="w-5 h-5 text-[#58A6FF]" />
+                  <h2 className="text-xl font-bold text-[#E6EDF3]">Strategies</h2>
+                  <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                    {strategies.length} Saved
+                  </span>
+                  {activeStrategyId && (
+                    <span className="px-2 py-1 bg-[#A371F7]/20 text-[#A371F7] text-sm rounded">
+                      Editing
+                    </span>
+                  )}
+                  {(selectedLPPositions.size > 0 || selectedGMXTrades.size > 0) && (
+                    <span className="px-2 py-1 bg-[#58A6FF]/20 text-[#58A6FF] text-sm rounded">
+                      {selectedLPPositions.size + selectedGMXTrades.size} selected
+                    </span>
+                  )}
+                </div>
+                {expandedSections.has("strategies") ? (
+                  <ChevronUp className="w-5 h-5 text-[#8B949E]" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-[#8B949E]" />
+                )}
+              </button>
 
-            {/* Column 3: Strategies */}
-            <StrategiesColumn
-              strategies={strategies}
-              positions={userPositions.map(up => {
-                // Calculate value from transactions
-                const txs = (up.transactionIds || [])
-                  .map(txId => transactionLookup.get(txId))
-                  .filter((tx): tx is Transaction => tx !== undefined);
-                const valueUsd = txs.reduce((sum, tx) => sum + (tx._totalOut || 0), 0);
-                
-                return {
-                  id: up.id,
-                  protocol: up.protocol || "",
-                  protocolName: up.protocol || "Custom",
-                  chain: up.chain || "",
-                  type: up.position_type || "custom",
-                  name: up.name,
-                  displayName: up.name,
-                  valueUsd,
-                  status: up.status as "open" | "closed",
-                  transactionCount: up.transactionCount,
-                };
-              })}
-              onCreateStrategy={handleCreateStrategy}
-              onDeleteStrategy={handleDeleteStrategy}
-              isLoading={loading}
-            />
+              {expandedSections.has("strategies") && (
+                <div className="px-6 pb-6 border-t border-[#21262D]">
+
+                  {/* Strategy Builder - Single unified section */}
+                  <div className="bg-[#0D1117] rounded-xl border border-[#30363D] p-5 mt-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-2">
+                        {activeStrategyId ? (
+                          <>
+                            <Edit2 className="w-4 h-4 text-[#A371F7]" />
+                            <h3 className="text-lg font-medium text-[#E6EDF3]">Editing Strategy</h3>
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="w-4 h-4 text-[#58A6FF]" />
+                            <h3 className="text-lg font-medium text-[#E6EDF3]">New Strategy</h3>
+                          </>
+                        )}
+                      </div>
+                      {activeStrategyId && (
+                        <button
+                          onClick={cancelEditing}
+                          className="text-sm text-[#8B949E] hover:text-[#F85149] flex items-center gap-1"
+                        >
+                          <X className="w-4 h-4" />
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Strategy Name Input */}
+                    <div className="mb-4">
+                      <input
+                        type="text"
+                        value={newStrategyName}
+                        onChange={(e) => setNewStrategyName(e.target.value)}
+                        placeholder="Strategy name..."
+                        className="w-full px-4 py-3 bg-[#161B22] border border-[#30363D] rounded-lg text-sm text-[#E6EDF3] placeholder-[#8B949E] focus:outline-none focus:ring-2 focus:ring-[#58A6FF]"
+                      />
+                    </div>
+
+                    {/* Selected Items Count */}
+                    <div className="text-sm text-[#8B949E] mb-4">
+                      {selectedLPPositions.size + selectedGMXTrades.size > 0 ? (
+                        <span>
+                          <span className="text-[#58A6FF] font-medium">{selectedLPPositions.size}</span> LP positions,{" "}
+                          <span className="text-[#58A6FF] font-medium">{selectedGMXTrades.size}</span> Perp trades
+                        </span>
+                      ) : (
+                        <span>Select positions from the sections below to add to this strategy</span>
+                      )}
+                    </div>
+
+                    {/* Selected Items Preview */}
+                    {(selectedLPPositions.size > 0 || selectedGMXTrades.size > 0) && (
+                      <div className="space-y-2 mb-4 max-h-48 overflow-y-auto">
+                        {/* Selected LP Positions */}
+                        {Array.from(selectedLPPositions).map(posId => {
+                          const pool = poolGroups.find(p => p.positions.some(pos => pos.position_id === posId));
+                          if (!pool) return null;
+                          return (
+                            <div key={posId} className="flex items-center justify-between bg-[#161B22] p-3 rounded-lg text-sm">
+                              <div className="flex items-center gap-3">
+                                <span className="px-2 py-1 bg-[#58A6FF]/20 text-[#58A6FF] rounded text-xs font-medium">LP</span>
+                                <span className="text-[#E6EDF3]">
+                                  {pool.token0_symbol}/{pool.token1_symbol}
+                                </span>
+                                <span className="text-[#8B949E]">#{posId}</span>
+                                <span className="text-[#8B949E]">{pool.fee_tier}</span>
+                              </div>
+                              <button
+                                onClick={() => toggleLPSelection(posId)}
+                                className="text-[#8B949E] hover:text-[#F85149] p-1"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })}
+
+                        {/* Selected GMX Trades */}
+                        {Array.from(selectedGMXTrades).map(txHash => {
+                          const trade = gmxTrades.find(t => t.tx_hash === txHash);
+                          if (!trade) return null;
+                          return (
+                            <div key={txHash} className="flex items-center justify-between bg-[#161B22] p-3 rounded-lg text-sm">
+                              <div className="flex items-center gap-3">
+                                <span className="px-2 py-1 bg-[#A371F7]/20 text-[#A371F7] rounded text-xs font-medium">
+                                  {trade.action}
+                                </span>
+                                <span className="text-[#E6EDF3]">{trade.market}</span>
+                                <span className={`text-xs ${trade.is_long ? "text-[#3FB950]" : "text-[#F85149]"}`}>
+                                  {trade.side}
+                                </span>
+                                <span className="text-[#8B949E]">{formatDate(trade.timestamp)}</span>
+                                <span className="text-[#8B949E]">{formatUSD(trade.size_delta_usd)}</span>
+                              </div>
+                              <button
+                                onClick={() => toggleGMXTradeSelection(txHash)}
+                                className="text-[#8B949E] hover:text-[#F85149] p-1"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Save Button */}
+                    <button
+                      onClick={saveStrategy}
+                      disabled={!newStrategyName.trim() || (selectedLPPositions.size === 0 && selectedGMXTrades.size === 0)}
+                      className="w-full px-5 py-3 bg-[#238636] hover:bg-[#2EA043] disabled:bg-[#21262D] disabled:text-[#8B949E] text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Save className="w-4 h-4" />
+                      {activeStrategyId ? "Save Changes" : "Save Strategy"}
+                    </button>
+                  </div>
+
+                  {/* Saved Strategies List */}
+                  {strategies.length > 0 && (
+                    <div className="mt-4">
+                      <h3 className="text-sm font-medium text-[#8B949E] mb-3">Saved Strategies</h3>
+                      <div className="space-y-2">
+                        {strategies.map((strategy) => (
+                          <div
+                            key={strategy.id}
+                            className={`bg-[#0D1117] rounded-lg border p-4 ${
+                              activeStrategyId === strategy.id
+                                ? "border-[#A371F7]"
+                                : "border-[#30363D]"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-4">
+                                <h4 className="text-base font-bold text-[#E6EDF3]">{strategy.name}</h4>
+                                <div className="flex items-center gap-3 text-xs text-[#8B949E]">
+                                  <span>{strategy.items.filter(i => i.type === "lp").length} LP positions</span>
+                                  <span>{strategy.items.filter(i => i.type === "gmx_trade").length} Perp trades</span>
+                                </div>
+                                {activeStrategyId === strategy.id && (
+                                  <span className="px-2 py-1 bg-[#A371F7]/20 text-[#A371F7] text-xs rounded">
+                                    Currently Editing
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => startEditingStrategy(strategy.id)}
+                                  disabled={activeStrategyId === strategy.id}
+                                  className="px-3 py-1.5 text-sm text-[#58A6FF] hover:bg-[#58A6FF]/10 disabled:opacity-50 disabled:cursor-not-allowed rounded transition-colors flex items-center gap-1"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    // TODO: Navigate to ledger with strategy data
+                                    console.log("Analyze strategy:", strategy);
+                                  }}
+                                  className="px-3 py-1.5 text-sm bg-[#58A6FF] hover:bg-[#79B8FF] text-white rounded transition-colors"
+                                >
+                                  Analyze
+                                </button>
+                                <button
+                                  onClick={() => removeStrategy(strategy.id)}
+                                  className="p-1.5 text-[#8B949E] hover:text-[#F85149] hover:bg-[#F85149]/10 rounded transition-colors"
+                                >
+                                  <X className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Empty state when no strategies */}
+                  {strategies.length === 0 && selectedLPPositions.size === 0 && selectedGMXTrades.size === 0 && (
+                    <div className="mt-4 text-center py-6">
+                      <Layers className="w-10 h-10 text-[#8B949E] mx-auto mb-3" />
+                      <p className="text-[#8B949E]">
+                        Select positions from the sections below to create a strategy
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ======================================== */}
+            {/* SECTION 2: LP POSITIONS (Middle) */}
+            {/* ======================================== */}
+            <div className="bg-[#161B22] rounded-xl border border-[#30363D] overflow-hidden">
+              {/* Section Header - Clickable to collapse */}
+              <button
+                onClick={() => toggleSection("lp")}
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-5 h-5 rounded-full bg-[#58A6FF]/20 flex items-center justify-center">
+                    <span className="text-[#58A6FF] text-xs font-bold">LP</span>
+                  </div>
+                  <h2 className="text-xl font-bold text-[#E6EDF3]">LP Positions</h2>
+                  <span className="px-2 py-1 bg-[#238636]/20 text-[#3FB950] text-sm rounded">
+                    {activeLPPositions} Active
+                  </span>
+                  <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                    {totalLPPositions} Total
+                  </span>
+                  <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                    {poolGroups.length} Pools
+                  </span>
+                </div>
+                {expandedSections.has("lp") ? (
+                  <ChevronUp className="w-5 h-5 text-[#8B949E]" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-[#8B949E]" />
+                )}
+              </button>
+
+              {expandedSections.has("lp") && (
+                <div className="border-t border-[#21262D]">
+                  {poolGroups.length > 0 ? (
+                    <div className="divide-y divide-[#21262D]">
+                      {poolGroups.map((pool, idx) => {
+                        const isPoolExpanded = expandedPools.has(pool.pool_address);
+                        return (
+                          <div key={idx}>
+                            {/* Pool Header - Collapsible */}
+                            <button
+                              onClick={() => togglePool(pool.pool_address)}
+                              className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
+                            >
+                              <div className="flex items-center gap-4">
+                                {isPoolExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-[#8B949E]" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-[#8B949E]" />
+                                )}
+                                <h3 className="text-lg font-bold text-[#E6EDF3]">
+                                  {pool.token0_symbol}/{pool.token1_symbol}
+                                </h3>
+                                <span className="px-2 py-1 bg-[#30363D] rounded text-[#8B949E] text-xs">
+                                  {pool.fee_tier}
+                                </span>
+                                <span className="px-2 py-1 bg-[#21262D] rounded text-[#8B949E] text-xs">
+                                  {pool.positions.length} position{pool.positions.length !== 1 ? "s" : ""}
+                                </span>
+                                <span className="px-2 py-1 bg-[#238636]/20 text-[#3FB950] text-xs rounded">
+                                  {pool.positions.filter(p => p.status === "ACTIVE").length} active
+                                </span>
+                              </div>
+                            </button>
+
+                            {/* Pool Positions */}
+                            {isPoolExpanded && (
+                              <div className="bg-[#0D1117] px-6 pb-4">
+                                <div className="space-y-3">
+                                  {pool.positions.map((position) => {
+                                    const isExpanded = expandedLPPositions.has(position.position_id);
+                                    const isLoading = loadingLPPositions.has(position.position_id);
+                                    const history = lpHistories[position.position_id];
+                                    const isSelected = selectedLPPositions.has(position.position_id);
+                                    const strategyNames = positionStrategyMap[position.position_id] || [];
+
+                                    return (
+                                      <div key={position.position_id} className="bg-[#161B22] rounded-lg border border-[#30363D] overflow-hidden">
+                                        {/* Position Header */}
+                                        <div className="px-4 py-3 flex items-center justify-between hover:bg-[#1C2128] transition-colors">
+                                          <div className="flex items-center gap-4">
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                toggleLPSelection(position.position_id);
+                                              }}
+                                              className="flex-shrink-0"
+                                            >
+                                              {isSelected ? (
+                                                <CheckSquare className="w-5 h-5 text-[#58A6FF]" />
+                                              ) : (
+                                                <Square className="w-5 h-5 text-[#8B949E] hover:text-[#58A6FF]" />
+                                              )}
+                                            </button>
+                                            <button
+                                              onClick={() => toggleLPPosition(position.position_id)}
+                                              className="flex items-center gap-4 flex-1"
+                                            >
+                                              {isExpanded ? (
+                                                <ChevronDown className="w-4 h-4 text-[#8B949E]" />
+                                              ) : (
+                                                <ChevronRight className="w-4 h-4 text-[#8B949E]" />
+                                              )}
+                                              <span className="text-[#E6EDF3] font-medium">
+                                                Position #{position.position_id}
+                                              </span>
+                                              <span className={`text-xs px-2 py-1 rounded ${
+                                                position.status === "ACTIVE"
+                                                  ? "bg-[#238636]/20 text-[#3FB950]"
+                                                  : "bg-[#21262D] text-[#8B949E]"
+                                              }`}>
+                                                {position.status}
+                                              </span>
+                                              <span className="text-sm text-[#8B949E]">
+                                                Opened {formatDate(position.mint_timestamp)}
+                                              </span>
+                                              {/* Strategy badges */}
+                                              {strategyNames.map((name) => (
+                                                <span
+                                                  key={name}
+                                                  className="px-2 py-1 bg-[#A371F7]/20 text-[#A371F7] text-xs rounded flex items-center gap-1"
+                                                >
+                                                  <Layers className="w-3 h-3" />
+                                                  {name}
+                                                </span>
+                                              ))}
+                                            </button>
+                                          </div>
+                                          {isLoading && (
+                                            <Loader2 className="w-4 h-4 animate-spin text-[#58A6FF]" />
+                                          )}
+                                        </div>
+
+                                        {/* Expanded LP History - Full Width Table */}
+                                        {isExpanded && history && (
+                                          <div className="px-4 pb-4 bg-[#0D1117] border-t border-[#21262D]">
+                                            {/* Summary Stats */}
+                                            <div className="grid grid-cols-6 gap-4 my-4 p-4 bg-[#161B22] rounded-lg">
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Deposited</div>
+                                                <div className="text-[#3FB950] font-medium">
+                                                  {formatUSD(history.summary.total_deposited_usd)}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Withdrawn</div>
+                                                <div className="text-[#F85149] font-medium">
+                                                  {formatUSD(history.summary.total_withdrawn_usd)}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Fees Collected</div>
+                                                <div className="text-[#A371F7] font-medium">
+                                                  {formatUSD(history.summary.total_fees_collected_usd)}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Net Invested</div>
+                                                <div className="text-[#E6EDF3] font-medium">
+                                                  {formatUSD(history.summary.net_invested_usd)}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Transactions</div>
+                                                <div className="text-[#E6EDF3] font-medium">
+                                                  {history.summary.total_transactions}
+                                                </div>
+                                              </div>
+                                              <div>
+                                                <div className="text-xs text-[#8B949E] mb-1">Data Source</div>
+                                                <div className="text-[#8B949E] text-sm">
+                                                  {history.data_sources.amounts}
+                                                </div>
+                                              </div>
+                                            </div>
+
+                                            {/* Full-width Transaction Table */}
+                                            <div className="overflow-x-auto">
+                                              <table className="w-full text-sm">
+                                                <thead className="bg-[#161B22]">
+                                                  <tr className="text-[#8B949E]">
+                                                    <th className="text-left py-3 px-4 font-medium">Date</th>
+                                                    <th className="text-left py-3 px-4 font-medium">Action</th>
+                                                    <th className="text-right py-3 px-4 font-medium">{history.pool.token0.symbol}</th>
+                                                    <th className="text-right py-3 px-4 font-medium">{history.pool.token1.symbol}</th>
+                                                    <th className="text-right py-3 px-4 font-medium">{history.pool.token0.symbol} Price</th>
+                                                    <th className="text-right py-3 px-4 font-medium">{history.pool.token1.symbol} Price</th>
+                                                    <th className="text-right py-3 px-4 font-medium">Total USD</th>
+                                                    <th className="text-right py-3 px-4 font-medium">Source</th>
+                                                    <th className="text-center py-3 px-4 font-medium">Tx</th>
+                                                  </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-[#21262D]">
+                                                  {[...history.transactions].reverse().map((tx, txIdx) => (
+                                                    <tr key={txIdx} className="hover:bg-[#161B22]">
+                                                      <td className="py-3 px-4 text-[#8B949E]">
+                                                        {formatDate(tx.timestamp)}
+                                                      </td>
+                                                      <td className={`py-3 px-4 font-medium ${getLPActionColor(tx.action)}`}>
+                                                        {tx.action}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right text-[#E6EDF3]">
+                                                        {formatAmount(tx.token0_amount)}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right text-[#E6EDF3]">
+                                                        {formatAmount(tx.token1_amount)}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right text-[#8B949E]">
+                                                        {formatPrice(tx.token0_price_usd)}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right text-[#8B949E]">
+                                                        {formatPrice(tx.token1_price_usd)}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right text-[#E6EDF3] font-medium">
+                                                        {formatUSD(tx.total_value_usd)}
+                                                      </td>
+                                                      <td className="py-3 px-4 text-right">
+                                                        <span className={`text-xs px-2 py-1 rounded ${
+                                                          tx.amount_source === "debank"
+                                                            ? "bg-[#238636]/20 text-[#3FB950]"
+                                                            : "bg-[#21262D] text-[#8B949E]"
+                                                        }`}>
+                                                          {tx.amount_source}
+                                                        </span>
+                                                      </td>
+                                                      <td className="py-3 px-4 text-center">
+                                                        <a
+                                                          href={`https://etherscan.io/tx/${tx.tx_hash}`}
+                                                          target="_blank"
+                                                          rel="noopener noreferrer"
+                                                          className="text-[#58A6FF] hover:underline"
+                                                        >
+                                                          <ExternalLink className="w-4 h-4 inline" />
+                                                        </a>
+                                                      </td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center">
+                      <p className="text-[#8B949E]">No LP positions found</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* ======================================== */}
+            {/* SECTION 3: PERP TRADES (Bottom) - Flat Table */}
+            {/* ======================================== */}
+            <div className="bg-[#161B22] rounded-xl border border-[#30363D] overflow-hidden">
+              {/* Section Header - Clickable to collapse */}
+              <button
+                onClick={() => toggleSection("perp")}
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-[#1C2128] transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  <TrendingUp className="w-5 h-5 text-[#3FB950]" />
+                  <h2 className="text-xl font-bold text-[#E6EDF3]">Perp Trades</h2>
+                  <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                    {totalGMXTrades} Trades
+                  </span>
+                  {gmxSummary && (
+                    <span className="px-2 py-1 bg-[#21262D] text-[#8B949E] text-sm rounded">
+                      {gmxSummary.unique_markets} Markets
+                    </span>
+                  )}
+                  <span className={`px-2 py-1 text-sm rounded ${
+                    totalGMXPnL >= 0
+                      ? "bg-[#238636]/20 text-[#3FB950]"
+                      : "bg-[#F85149]/20 text-[#F85149]"
+                  }`}>
+                    {totalGMXPnL >= 0 ? "+" : ""}{formatUSD(totalGMXPnL)} P&L
+                  </span>
+                </div>
+                {expandedSections.has("perp") ? (
+                  <ChevronUp className="w-5 h-5 text-[#8B949E]" />
+                ) : (
+                  <ChevronDown className="w-5 h-5 text-[#8B949E]" />
+                )}
+              </button>
+
+              {expandedSections.has("perp") && (
+                <div className="border-t border-[#21262D]">
+                  {gmxTrades.length > 0 ? (
+                    <div>
+                      {/* Filters */}
+                      <div className="px-6 py-4 bg-[#0D1117] border-b border-[#21262D] flex gap-4 flex-wrap items-center">
+                        {/* Market Filter */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[#8B949E]">Market:</span>
+                          <select
+                            value={gmxMarketFilter}
+                            onChange={(e) => setGMXMarketFilter(e.target.value)}
+                            className="bg-[#161B22] border border-[#30363D] rounded px-2 py-1 text-sm text-[#E6EDF3] focus:outline-none focus:ring-1 focus:ring-[#58A6FF]"
+                          >
+                            <option value="all">All</option>
+                            {uniqueMarkets.map(market => (
+                              <option key={market} value={market}>{market}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {/* Side Filter */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[#8B949E]">Side:</span>
+                          <select
+                            value={gmxSideFilter}
+                            onChange={(e) => setGMXSideFilter(e.target.value)}
+                            className="bg-[#161B22] border border-[#30363D] rounded px-2 py-1 text-sm text-[#E6EDF3] focus:outline-none focus:ring-1 focus:ring-[#58A6FF]"
+                          >
+                            <option value="all">All</option>
+                            <option value="Long">Long</option>
+                            <option value="Short">Short</option>
+                          </select>
+                        </div>
+
+                        {/* Action Filter */}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-[#8B949E]">Action:</span>
+                          <select
+                            value={gmxActionFilter}
+                            onChange={(e) => setGMXActionFilter(e.target.value)}
+                            className="bg-[#161B22] border border-[#30363D] rounded px-2 py-1 text-sm text-[#E6EDF3] focus:outline-none focus:ring-1 focus:ring-[#58A6FF]"
+                          >
+                            <option value="all">All</option>
+                            <option value="Open">Open</option>
+                            <option value="Increase">Increase</option>
+                            <option value="Decrease">Decrease</option>
+                            <option value="Close">Close</option>
+                          </select>
+                        </div>
+
+                        {/* Filtered count */}
+                        <span className="text-xs text-[#8B949E] ml-auto">
+                          Showing {filteredGMXTrades.length} of {gmxTrades.length} trades
+                        </span>
+                      </div>
+
+                      {/* Flat Trade Table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-[#161B22]">
+                            <tr className="text-[#8B949E]">
+                              <th className="text-left py-3 px-3 w-10"></th>
+                              <th
+                                className="text-left py-3 px-4 font-medium cursor-pointer hover:text-[#E6EDF3]"
+                                onClick={() => toggleGMXSort("timestamp")}
+                              >
+                                Date {gmxSortField === "timestamp" && (gmxSortDir === "desc" ? "↓" : "↑")}
+                              </th>
+                              <th
+                                className="text-left py-3 px-4 font-medium cursor-pointer hover:text-[#E6EDF3]"
+                                onClick={() => toggleGMXSort("market")}
+                              >
+                                Market {gmxSortField === "market" && (gmxSortDir === "desc" ? "↓" : "↑")}
+                              </th>
+                              <th className="text-left py-3 px-4 font-medium">Side</th>
+                              <th className="text-left py-3 px-4 font-medium">Action</th>
+                              <th
+                                className="text-right py-3 px-4 font-medium cursor-pointer hover:text-[#E6EDF3]"
+                                onClick={() => toggleGMXSort("size")}
+                              >
+                                Size {gmxSortField === "size" && (gmxSortDir === "desc" ? "↓" : "↑")}
+                              </th>
+                              <th
+                                className="text-right py-3 px-4 font-medium cursor-pointer hover:text-[#E6EDF3]"
+                                onClick={() => toggleGMXSort("price")}
+                              >
+                                Price {gmxSortField === "price" && (gmxSortDir === "desc" ? "↓" : "↑")}
+                              </th>
+                              <th
+                                className="text-right py-3 px-4 font-medium cursor-pointer hover:text-[#E6EDF3]"
+                                onClick={() => toggleGMXSort("pnl")}
+                              >
+                                P&L {gmxSortField === "pnl" && (gmxSortDir === "desc" ? "↓" : "↑")}
+                              </th>
+                              <th className="text-center py-3 px-4 font-medium">Tx</th>
+                              <th className="text-left py-3 px-4 font-medium">Strategy</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-[#21262D]">
+                            {filteredGMXTrades.map((trade) => {
+                              const isTradeSelected = selectedGMXTrades.has(trade.tx_hash);
+                              const tradeStrategyNames = positionStrategyMap[trade.tx_hash] || [];
+                              return (
+                                <tr key={trade.tx_hash} className="hover:bg-[#1C2128]">
+                                  <td className="py-3 px-3">
+                                    <button
+                                      onClick={() => toggleGMXTradeSelection(trade.tx_hash)}
+                                      className="flex-shrink-0"
+                                    >
+                                      {isTradeSelected ? (
+                                        <CheckSquare className="w-4 h-4 text-[#58A6FF]" />
+                                      ) : (
+                                        <Square className="w-4 h-4 text-[#8B949E] hover:text-[#58A6FF]" />
+                                      )}
+                                    </button>
+                                  </td>
+                                  <td className="py-3 px-4 text-[#8B949E]">
+                                    {formatDate(trade.timestamp)}
+                                  </td>
+                                  <td className="py-3 px-4 text-[#E6EDF3] font-medium">
+                                    {trade.market}
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <span className={`text-xs px-2 py-1 rounded flex items-center gap-1 w-fit ${
+                                      trade.side === "Short"
+                                        ? "bg-[#F85149]/20 text-[#F85149]"
+                                        : "bg-[#3FB950]/20 text-[#3FB950]"
+                                    }`}>
+                                      {trade.side === "Short" ? (
+                                        <TrendingDown className="w-3 h-3" />
+                                      ) : (
+                                        <TrendingUp className="w-3 h-3" />
+                                      )}
+                                      {trade.side}
+                                    </span>
+                                  </td>
+                                  <td className={`py-3 px-4 font-medium ${getGMXActionColor(trade.action)}`}>
+                                    {trade.action}
+                                  </td>
+                                  <td className="py-3 px-4 text-right text-[#E6EDF3]">
+                                    {formatUSD(trade.size_delta_usd)}
+                                  </td>
+                                  <td className="py-3 px-4 text-right text-[#8B949E]">
+                                    {formatPrice(trade.execution_price)}
+                                  </td>
+                                  <td className={`py-3 px-4 text-right font-medium ${
+                                    trade.pnl_usd > 0 ? "text-[#3FB950]" : trade.pnl_usd < 0 ? "text-[#F85149]" : "text-[#8B949E]"
+                                  }`}>
+                                    {trade.pnl_usd !== 0 ? (trade.pnl_usd > 0 ? "+" : "") + formatUSD(trade.pnl_usd) : "-"}
+                                  </td>
+                                  <td className="py-3 px-4 text-center">
+                                    <a
+                                      href={`https://arbiscan.io/tx/${trade.tx_hash}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[#58A6FF] hover:underline"
+                                    >
+                                      <ExternalLink className="w-4 h-4 inline" />
+                                    </a>
+                                  </td>
+                                  <td className="py-3 px-4">
+                                    <div className="flex gap-1 flex-wrap">
+                                      {tradeStrategyNames.map((name) => (
+                                        <span
+                                          key={name}
+                                          className="px-2 py-0.5 bg-[#A371F7]/20 text-[#A371F7] text-xs rounded flex items-center gap-1"
+                                        >
+                                          <Layers className="w-2.5 h-2.5" />
+                                          {name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center">
+                      <p className="text-[#8B949E]">No GMX trades found</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
           </div>
         )}
-      </main>
 
-      {/* Create Strategy Modal */}
-      <CreateStrategyModal
-        isOpen={showCreateStrategy}
-        onClose={() => setShowCreateStrategy(false)}
-        onSubmit={handleStrategySubmit}
-        availablePositions={data?.positions || []}
-      />
-
-      {/* Create Position Modal */}
-      <CreatePositionModal
-        isOpen={showCreatePosition}
-        onClose={() => setShowCreatePosition(false)}
-        onSubmit={handleCreatePosition}
-      />
+        {/* Empty State */}
+        {!loading && poolGroups.length === 0 && gmxTrades.length === 0 && walletAddress && !error && (
+          <div className="bg-[#161B22] rounded-xl border border-[#30363D] p-12 text-center">
+            <p className="text-[#8B949E]">Click &quot;Load Positions&quot; to fetch LP and Perp positions</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

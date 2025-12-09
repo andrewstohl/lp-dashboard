@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8004";
 
 // =============================================================================
 // Transaction Types (DeBank format for Discovery)
@@ -222,6 +222,10 @@ export interface PerpetualPosition {
   // Enriched fields from ledger endpoint
   initial_margin_usd?: number;
   funding_rewards_usd?: number;
+  // Strategy mode fields
+  realized_pnl_usd?: number;
+  status?: string;
+  trade_count?: number;
 }
 
 // GMX Rewards

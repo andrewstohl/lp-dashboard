@@ -4,7 +4,7 @@ Replaces DeBank for LP position details - real-time, accurate data
 """
 import httpx
 import math
-from typing import Optional, Dict, Any, List
+from typing import Optional, Any
 from decimal import Decimal
 import logging
 
@@ -28,7 +28,7 @@ class TheGraphService:
         """Close HTTP client"""
         await self.client.aclose()
 
-    async def _query(self, query: str) -> Optional[Dict]:
+    async def _query(self, query: str) -> Optional[dict]:
         """Execute a GraphQL query"""
         try:
             response = await self.client.post(
@@ -61,7 +61,7 @@ class TheGraphService:
             return 0.0
         return float(bundle.get("ethPriceUSD", 0))
 
-    async def get_positions_by_owner(self, owner_address: str, first: int = 1000) -> List[Dict]:
+    async def get_positions_by_owner(self, owner_address: str, first: int = 1000) -> list[dict]:
         """
         Get ALL Uniswap V3 positions owned by a wallet address.
         This is the primary method for comprehensive LP position discovery.
@@ -124,8 +124,8 @@ class TheGraphService:
     async def get_position_history(
         self,
         position_id: str,
-        debank_txs: Optional[Dict[str, Dict]] = None
-    ) -> Optional[Dict[str, Any]]:
+        debank_txs: Optional[dict[str, dict]] = None
+    ) -> Optional[dict[str, Any]]:
         """
         Get complete transaction history for a position with USD values.
 
@@ -367,7 +367,7 @@ class TheGraphService:
             }
         }
 
-    async def get_pool_data(self, pool_address: str) -> Optional[Dict]:
+    async def get_pool_data(self, pool_address: str) -> Optional[dict]:
         """
         Get comprehensive pool data including current price and token info
         """
@@ -402,7 +402,7 @@ class TheGraphService:
             return None
         return data.get("data", {}).get("pool")
 
-    async def get_position_data(self, position_id: str) -> Optional[Dict]:
+    async def get_position_data(self, position_id: str) -> Optional[dict]:
         """
         Get comprehensive position data including liquidity and fee info
         """
@@ -507,7 +507,7 @@ class TheGraphService:
         
         return (amount0_adjusted, amount1_adjusted)
 
-    async def get_full_position(self, position_id: str) -> Optional[Dict[str, Any]]:
+    async def get_full_position(self, position_id: str) -> Optional[dict[str, Any]]:
         """
         Get fully enriched position data with calculated token amounts and USD values
         
@@ -621,7 +621,7 @@ class TheGraphService:
         }
 
 
-    async def get_position_transactions(self, position_id: str) -> Dict[str, List]:
+    async def get_position_transactions(self, position_id: str) -> dict[str, list]:
         """
         Get transaction summary for a position.
         
@@ -730,7 +730,7 @@ class TheGraphService:
         min_block: int = 0,
         token0_address: str = None,
         token1_address: str = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Get all mint transactions for an owner in a pool with per-token USD values.
         Calculates each token's value at the exact block of each mint using subgraph prices.
@@ -826,7 +826,7 @@ class TheGraphService:
         token0_address: str,
         token1_address: str,
         block_number: int
-    ) -> Optional[Dict[str, float]]:
+    ) -> Optional[dict[str, float]]:
         """Get token prices in USD at a specific block."""
         query = """
         {
@@ -866,7 +866,7 @@ class TheGraphService:
         position_id: str,
         coingecko_service=None,
         owner_address: str = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[dict[str, Any]]:
         """
         Get full position data with historical USD values for initial deposits.
         
@@ -940,7 +940,7 @@ class TheGraphService:
         return int(tx.get("timestamp", 0))
 
 
-    async def get_unclaimed_fees(self, position_id: str) -> Dict[str, float]:
+    async def get_unclaimed_fees(self, position_id: str) -> dict[str, float]:
         """
         Calculate unclaimed fees for a position
         
