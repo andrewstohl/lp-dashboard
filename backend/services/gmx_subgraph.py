@@ -16,8 +16,9 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# GMX V2 Synthetics Stats Subgraph (Arbitrum)
-GMX_SUBGRAPH_URL = "https://subgraph.satsuma-prod.com/3b2ced13c8d9/gmx/synthetics-arbitrum-stats/api"
+# GMX V2 Synthetics Subgraph (Arbitrum) - Subsquid
+# Note: Satsuma subgraph was deprecated. Migrated to Subsquid in Dec 2025.
+GMX_SUBGRAPH_URL = "https://gmx.squids.live/gmx-synthetics-arbitrum/graphql"
 
 # Known token addresses on Arbitrum
 TOKEN_INFO = {
@@ -134,137 +135,81 @@ class GMXSubgraphService:
         Get ALL GMX V2 perpetual positions (both active and closed).
 
         This mirrors the Uniswap get_positions_by_owner() pattern.
-        Groups by positionKey and returns summary for each position.
+        Groups by market+side (synthetic position key) and returns summary for each position.
+
+        Uses Subsquid's positionChanges entity.
 
         Returns:
             List of position summaries with status, trades, P&L
         """
-        wallet = wallet_address.lower()
-
-        # Query position increases
-        inc_query = """
-        {
-          positionIncreases(
-            where: {account: "%s"}
-            orderBy: transaction__timestamp
-            orderDirection: desc
-            first: %d
+        # Query position changes (both increases and decreases)
+        query = """
+        query {
+          positionChanges(
+            where: {account_containsInsensitive: "%s"}
+            orderBy: timestamp_DESC
+            limit: %d
           ) {
             id
-            positionKey
-            marketAddress
-            sizeInUsd
-            sizeDeltaUsd
-            collateralAmount
-            executionPrice
+            type
+            market
             isLong
-            transaction {
-              id
-              timestamp
-              blockNumber
-            }
-          }
-        }
-        """ % (wallet, limit)
-
-        # Query position decreases
-        dec_query = """
-        {
-          positionDecreases(
-            where: {account: "%s"}
-            orderBy: transaction__timestamp
-            orderDirection: desc
-            first: %d
-          ) {
-            id
-            positionKey
-            marketAddress
             sizeInUsd
             sizeDeltaUsd
             collateralAmount
             executionPrice
             basePnlUsd
-            isLong
-            transaction {
-              id
-              timestamp
-              blockNumber
-            }
+            timestamp
           }
         }
-        """ % (wallet, limit)
+        """ % (wallet_address.lower(), limit)
 
-        inc_data = await self._query(inc_query)
-        dec_data = await self._query(dec_query)
+        data = await self._query(query)
+        changes = data.get("data", {}).get("positionChanges", []) if data else []
 
-        increases = inc_data.get("data", {}).get("positionIncreases", []) if inc_data else []
-        decreases = dec_data.get("data", {}).get("positionDecreases", []) if dec_data else []
+        increases = [c for c in changes if c.get("type") == "increase"]
+        decreases = [c for c in changes if c.get("type") == "decrease"]
 
-        logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for {wallet[:10]}...")
+        logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for {wallet_address[:10]}...")
 
-        # Group by positionKey
+        # Group by market+side (synthetic position key since Subsquid doesn't have positionKey)
         positions_map: dict[str, dict] = {}
 
-        for inc in increases:
-            pos_key = inc.get("positionKey", "")
-            if not pos_key:
-                continue
+        for change in changes:
+            market_addr = change.get("market", "").lower()
+            is_long = change.get("isLong", False)
+            pos_key = f"{market_addr}:{is_long}"
 
             if pos_key not in positions_map:
-                market_addr = inc.get("marketAddress", "").lower()
                 market_info = MARKET_INFO.get(market_addr, {})
                 positions_map[pos_key] = {
                     "position_key": pos_key,
                     "market_address": market_addr,
                     "market_name": market_info.get("name", "Unknown"),
                     "index_symbol": market_info.get("index_token", "?"),
-                    "is_long": inc.get("isLong", False),
-                    "side": "Long" if inc.get("isLong", False) else "Short",
+                    "is_long": is_long,
+                    "side": "Long" if is_long else "Short",
                     "increases": [],
                     "decreases": [],
                 }
 
-            tx = inc.get("transaction", {})
             price_precision = self._get_price_precision(market_addr)
-            positions_map[pos_key]["increases"].append({
-                "timestamp": self._safe_int(tx.get("timestamp", 0)),
-                "tx_hash": tx.get("id", ""),
-                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
-                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
-                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / price_precision,
-                "collateral": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
-            })
+            ts = self._safe_int(change.get("timestamp", 0))
 
-        for dec in decreases:
-            pos_key = dec.get("positionKey", "")
-            if not pos_key:
-                continue
+            trade_data = {
+                "timestamp": ts,
+                "tx_hash": change.get("id", ""),
+                "size_delta_usd": self._safe_int(change.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "size_after_usd": self._safe_int(change.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
+                "execution_price": self._safe_int(change.get("executionPrice", 0)) / price_precision,
+                "collateral": self._safe_int(change.get("collateralAmount", 0)) / USDC_PRECISION,
+            }
 
-            if pos_key not in positions_map:
-                market_addr = dec.get("marketAddress", "").lower()
-                market_info = MARKET_INFO.get(market_addr, {})
-                positions_map[pos_key] = {
-                    "position_key": pos_key,
-                    "market_address": market_addr,
-                    "market_name": market_info.get("name", "Unknown"),
-                    "index_symbol": market_info.get("index_token", "?"),
-                    "is_long": dec.get("isLong", False),
-                    "side": "Long" if dec.get("isLong", False) else "Short",
-                    "increases": [],
-                    "decreases": [],
-                }
-
-            tx = dec.get("transaction", {})
-            price_precision = self._get_price_precision(market_addr)
-            positions_map[pos_key]["decreases"].append({
-                "timestamp": self._safe_int(tx.get("timestamp", 0)),
-                "tx_hash": tx.get("id", ""),
-                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
-                "size_after_usd": self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
-                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / price_precision,
-                "collateral": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
-                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / GMX_USD_PRECISION,
-            })
+            if change.get("type") == "increase":
+                positions_map[pos_key]["increases"].append(trade_data)
+            else:
+                trade_data["pnl_usd"] = self._safe_int(change.get("basePnlUsd", 0)) / GMX_USD_PRECISION
+                positions_map[pos_key]["decreases"].append(trade_data)
 
         # Build position summaries
         positions = []
@@ -321,135 +266,94 @@ class GMXSubgraphService:
         standalone trade record. This is optimized for display in a flat
         table with filtering/sorting.
 
+        Uses Subsquid's positionChanges entity with unified increase/decrease data.
+
         Returns:
             List of trade records with: market, side, action, size, price, pnl, fees, tx
         """
-        wallet = wallet_address.lower()
-
-        # Query position increases
-        inc_query = """
-        {
-          positionIncreases(
-            where: {account: "%s"}
-            orderBy: transaction__timestamp
-            orderDirection: desc
-            first: %d
+        # Query position changes (both increases and decreases)
+        # Subsquid uses account_containsInsensitive because addresses have checksum casing
+        query = """
+        query {
+          positionChanges(
+            where: {account_containsInsensitive: "%s"}
+            orderBy: timestamp_DESC
+            limit: %d
           ) {
             id
-            positionKey
-            marketAddress
-            sizeInUsd
-            sizeDeltaUsd
-            collateralAmount
-            executionPrice
+            type
+            account
+            market
             isLong
-            transaction {
-              id
-              timestamp
-            }
-          }
-        }
-        """ % (wallet, limit)
-
-        # Query position decreases
-        dec_query = """
-        {
-          positionDecreases(
-            where: {account: "%s"}
-            orderBy: transaction__timestamp
-            orderDirection: desc
-            first: %d
-          ) {
-            id
-            positionKey
-            marketAddress
             sizeInUsd
             sizeDeltaUsd
             collateralAmount
             executionPrice
             basePnlUsd
-            isLong
-            transaction {
-              id
-              timestamp
-            }
+            timestamp
           }
         }
-        """ % (wallet, limit)
+        """ % (wallet_address.lower(), limit)
 
-        inc_data = await self._query(inc_query)
-        dec_data = await self._query(dec_query)
+        data = await self._query(query)
+        changes = data.get("data", {}).get("positionChanges", []) if data else []
 
-        increases = inc_data.get("data", {}).get("positionIncreases", []) if inc_data else []
-        decreases = dec_data.get("data", {}).get("positionDecreases", []) if dec_data else []
+        increases = [c for c in changes if c.get("type") == "increase"]
+        decreases = [c for c in changes if c.get("type") == "decrease"]
 
         logger.info(f"Found {len(increases)} increases and {len(decreases)} decreases for flat trade list")
 
         trades = []
 
-        # Track first increase per position key to determine Open vs Increase
+        # Track first increase per market+side to determine Open vs Increase
+        # Subsquid doesn't have positionKey, so we create a synthetic one
         position_first_increase: dict[str, int] = {}
-        for inc in increases:
-            pos_key = inc.get("positionKey", "")
-            ts = self._safe_int(inc.get("transaction", {}).get("timestamp", 0))
+        for change in changes:
+            if change.get("type") != "increase":
+                continue
+            market = change.get("market", "").lower()
+            is_long = change.get("isLong", False)
+            pos_key = f"{market}:{is_long}"
+            ts = self._safe_int(change.get("timestamp", 0))
             if pos_key not in position_first_increase or ts < position_first_increase[pos_key]:
                 position_first_increase[pos_key] = ts
 
-        # Process increases
-        for inc in increases:
-            pos_key = inc.get("positionKey", "")
-            market_addr = inc.get("marketAddress", "").lower()
+        # Process all changes
+        for change in changes:
+            market_addr = change.get("market", "").lower()
             market_info = MARKET_INFO.get(market_addr, {})
-            tx = inc.get("transaction", {})
-            ts = self._safe_int(tx.get("timestamp", 0))
+            ts = self._safe_int(change.get("timestamp", 0))
             price_precision = self._get_price_precision(market_addr)
+            is_long = change.get("isLong", False)
+            pos_key = f"{market_addr}:{is_long}"
+            is_increase = change.get("type") == "increase"
 
-            # Determine if this is the first increase (Open) or subsequent (Increase)
-            is_first = ts == position_first_increase.get(pos_key, 0)
+            size_after = self._safe_int(change.get("sizeInUsd", 0)) / GMX_USD_PRECISION
+
+            # Determine action type
+            if is_increase:
+                is_first = ts == position_first_increase.get(pos_key, 0)
+                action = "Open" if is_first else "Increase"
+                pnl = 0.0
+            else:
+                action = "Close" if size_after < 0.01 else "Decrease"
+                pnl = self._safe_int(change.get("basePnlUsd", 0)) / GMX_USD_PRECISION
 
             trades.append({
                 "timestamp": ts,
-                "tx_hash": tx.get("id", ""),
+                "tx_hash": change.get("id", ""),
                 "position_key": pos_key,
                 "market_address": market_addr,
                 "market": market_info.get("index_token", "?"),
                 "market_name": market_info.get("name", "Unknown"),
-                "side": "Long" if inc.get("isLong", False) else "Short",
-                "is_long": inc.get("isLong", False),
-                "action": "Open" if is_first else "Increase",
-                "size_delta_usd": self._safe_int(inc.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
-                "size_after_usd": self._safe_int(inc.get("sizeInUsd", 0)) / GMX_USD_PRECISION,
-                "collateral_usd": self._safe_int(inc.get("collateralAmount", 0)) / USDC_PRECISION,
-                "execution_price": self._safe_int(inc.get("executionPrice", 0)) / price_precision,
-                "pnl_usd": 0.0,
-                "fees_usd": 0.0,  # Fees would require additional query
-            })
-
-        # Process decreases
-        for dec in decreases:
-            pos_key = dec.get("positionKey", "")
-            market_addr = dec.get("marketAddress", "").lower()
-            market_info = MARKET_INFO.get(market_addr, {})
-            tx = dec.get("transaction", {})
-            ts = self._safe_int(tx.get("timestamp", 0))
-            price_precision = self._get_price_precision(market_addr)
-            size_after = self._safe_int(dec.get("sizeInUsd", 0)) / GMX_USD_PRECISION
-
-            trades.append({
-                "timestamp": ts,
-                "tx_hash": tx.get("id", ""),
-                "position_key": pos_key,
-                "market_address": market_addr,
-                "market": market_info.get("index_token", "?"),
-                "market_name": market_info.get("name", "Unknown"),
-                "side": "Long" if dec.get("isLong", False) else "Short",
-                "is_long": dec.get("isLong", False),
-                "action": "Close" if size_after < 0.01 else "Decrease",
-                "size_delta_usd": self._safe_int(dec.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
+                "side": "Long" if is_long else "Short",
+                "is_long": is_long,
+                "action": action,
+                "size_delta_usd": self._safe_int(change.get("sizeDeltaUsd", 0)) / GMX_USD_PRECISION,
                 "size_after_usd": size_after,
-                "collateral_usd": self._safe_int(dec.get("collateralAmount", 0)) / USDC_PRECISION,
-                "execution_price": self._safe_int(dec.get("executionPrice", 0)) / price_precision,
-                "pnl_usd": self._safe_int(dec.get("basePnlUsd", 0)) / GMX_USD_PRECISION,
+                "collateral_usd": self._safe_int(change.get("collateralAmount", 0)) / USDC_PRECISION,
+                "execution_price": self._safe_int(change.get("executionPrice", 0)) / price_precision,
+                "pnl_usd": pnl,
                 "fees_usd": 0.0,  # Fees would require additional query
             })
 
