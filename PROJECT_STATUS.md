@@ -1,8 +1,8 @@
 # VORA Dashboard - Project Status Document
 
-> **Last Updated:** November 27, 2025 (Build Page Phases 1-7 Complete, Phase 8 Next)  
-> **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)  
-> **Repository:** https://github.com/andrewstohl/lp-dashboard  
+> **Last Updated:** December 8, 2025 (Build Page Complete, Codebase Professionalized)
+> **Project Name:** VORA Dashboard (DeFi LP Intelligence Platform)
+> **Repository:** https://github.com/andrewstohl/lp-dashboard
 > **Collaboration:** Drew (Product Owner) + Claude (Code Implementation) + Kimi K2 (System Design)
 
 ---
@@ -85,12 +85,14 @@ lp-dashboard/
 ├── frontend/
 │   ├── app/
 │   │   ├── page.tsx              # Main dashboard entry
+│   │   ├── build/page.tsx        # Strategy Builder (3-column UI)
 │   │   ├── ledger/page.tsx       # Ledger view
 │   │   ├── layout.tsx            # Root layout
 │   │   └── globals.css           # Global styles
 │   ├── components/
 │   │   ├── ProfessionalDashboard.tsx  # Main dashboard component
 │   │   ├── LedgerMatrix.tsx           # Net exposure matrix
+│   │   ├── Navigation.tsx             # Dashboard/Build/Ledger tabs
 │   │   ├── PerformanceAnalytics.tsx   # Fee trend charts
 │   │   ├── DecisionIntelligence.tsx   # Actionable insights
 │   │   └── ProfessionalStates.tsx     # Loading/Error/Empty states
@@ -100,18 +102,29 @@ lp-dashboard/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py               # FastAPI entry point
-│   │   └── api/v1/wallet.py      # Wallet endpoints
+│   │   └── api/v1/
+│   │       ├── wallet.py         # Wallet endpoints
+│   │       ├── build.py          # Build/Strategy endpoints (980 lines)
+│   │       ├── transactions.py   # Transaction discovery
+│   │       ├── position_lifecycle.py  # Yield position lifecycle detection
+│   │       └── transaction_grouping.py # NFT-based transaction grouping
 │   ├── services/
-│   │   ├── debank.py             # DeBank API (discovery only)
-│   │   ├── thegraph.py           # Uniswap V3 Subgraph (620+ lines)
-│   │   ├── gmx_subgraph.py       # GMX V2 Subgraph (700+ lines)
+│   │   ├── debank.py             # DeBank API (discovery + unclaimed fees)
+│   │   ├── thegraph.py           # Uniswap V3 Subgraph (998 lines)
+│   │   ├── gmx_subgraph.py       # GMX V2 Subgraph (1100+ lines)
+│   │   ├── discovery.py          # Transaction discovery service
+│   │   ├── transaction_cache.py  # SQLite caching
 │   │   └── coingecko.py          # CoinGecko (fallback only)
 │   ├── core/
-│   │   ├── config.py             # Configuration
+│   │   ├── config.py             # Configuration with CORS
 │   │   ├── cache.py              # Redis caching
-│   │   └── errors.py             # Error handling
+│   │   └── logging_config.py     # Logging configuration
 │   └── .env                      # DEBANK_ACCESS_KEY, THEGRAPH_API_KEY
-└── docker-compose.yml
+├── docs/
+│   ├── DATA_PIPELINE_ARCHITECTURE.md  # Standardized data pipeline docs
+│   ├── BUILD_PAGE_PLAN.md             # Build page design
+│   └── RECONCILIATION_DESIGN.md       # Original reconciliation design
+└── docker-compose.yml            # With health checks
 ```
 
 ---
@@ -215,7 +228,7 @@ lp-dashboard/
 
 ---
 
-## ✅ Current Status (as of Nov 25, 2025)
+## ✅ Current Status (as of Dec 8, 2025)
 
 ### What's Working
 | Feature | Status | Data Source |
@@ -226,7 +239,7 @@ lp-dashboard/
 | Perp Position Data | ✅ Working | GMX V2 Subgraph |
 | Current Prices | ✅ Working | Protocol Subgraphs |
 | Historical Prices | ✅ Working | Subgraph at-block queries |
-| Position Discovery | ✅ Working | DeBank (LP only) |
+| Position Discovery | ✅ Working | DeBank + Subgraphs |
 | Unclaimed Fees | ✅ Working | DeBank |
 | GMX Rewards | ✅ Working | DeBank |
 | Dark Theme | ✅ Complete | Institutional navy theme |
@@ -237,8 +250,11 @@ lp-dashboard/
 | Decision Intelligence | ✅ Complete | Actionable insights |
 | Wallet Caching | ✅ Complete | Auto-loads on refresh |
 | Ledger View | ✅ Complete | Net exposure matrix |
-| Navigation | ✅ Complete | Dashboard/Ledger tabs |
+| Navigation | ✅ Complete | Dashboard/Build/Ledger tabs |
 | Mobile Responsive | ✅ Complete | All components |
+| **Build Page** | ✅ Complete | Three-column strategy builder |
+| **Strategy Loading** | ✅ Complete | Load strategies into Ledger |
+| **GMX Trade Selection** | ✅ Complete | Individual trade checkboxes |
 
 ### Data Accuracy Verification (Nov 25, 2025)
 
@@ -520,78 +536,172 @@ Original adapters (`uniswap_v3.py`, `gmx_v2.py`) retained for future enrichment 
 
 ---
 
-## 🔨 Build Page (NEW - November 27, 2025)
+## 🔨 Build Page ✅ COMPLETE (December 8, 2025)
 
 **Design Document:** [docs/BUILD_PAGE_PLAN.md](docs/BUILD_PAGE_PLAN.md)
+**Architecture Document:** [docs/DATA_PIPELINE_ARCHITECTURE.md](docs/DATA_PIPELINE_ARCHITECTURE.md)
 
-**Overview:** Three-column workflow for constructing portfolios from raw transactions. Replaces the overly complex Reconcile page approach with a cleaner architecture.
+**Overview:** Three-column strategy builder for constructing portfolios from LP positions and GMX perpetual trades. Strategies can be loaded into the Ledger for P&L analysis.
 
 ### Architecture
 
-| Column 1: Transactions | Column 2: Positions | Column 3: Strategies |
+| Column 1: LP Positions | Column 2: GMX Trades | Column 3: Strategies |
 |------------------------|---------------------|---------------------|
-| UNMATCHED transactions only | Auto-built from DeBank | User-defined groupings |
-| Expandable (show details) | Expandable (show txs) | Expandable (show positions) |
-| Click → assign to position | Click → assign to strategy | Click → view combined P&L |
+| All Uniswap V3 positions | All GMX V2 trades (flat list) | User-defined groupings |
+| Checkbox selection | Individual trade checkboxes | Expandable (show positions) |
+| Active/Closed filtering | Sortable by date/market/P&L | "Load to Ledger" button |
 
-### Data Sources
+### Data Sources (Standardized Pipeline)
 
 | Data | Source | Purpose |
 |------|--------|---------|
-| Transactions | DeBank `/user/all_history_list` | Complete discovery |
-| Open Positions | DeBank `/user/all_complex_protocol_list` | Position identification via `position_index` |
-| Historical Prices | CoinGecko | USD values at transaction time |
-| Closed Positions | Derived from unmatched transactions | Grouped by protocol+chain |
+| LP Positions | Uniswap V3 Subgraph | Complete position discovery |
+| LP Transaction History | Subgraph (structure) + DeBank (amounts) | Historical pricing |
+| GMX Trades | GMX V2 Subgraph | All perpetual trades |
+| Unclaimed Fees | DeBank | Real-time fee accrual |
+| Unrealized P&L | DeBank | Live perp position values |
 
-### Implementation Status
+### Key Features
 
-| Phase | Steps | Description | Status |
-|-------|-------|-------------|--------|
-| 1 | 1.1-1.3 | Foundation (page, prices, caching) | ✅ Complete |
-| 2 | 2.1-2.3 | Transaction discovery & MVT filtering | ✅ Complete |
-| 3 | 3.1-3.4 | Position discovery & building | ✅ Complete |
-| 4 | 4.1-4.2 | Transactions column UI | ✅ Complete |
-| 5 | 5.1-5.3 | Positions column UI | ✅ Complete |
-| 6 | 6.1-6.5 | Strategies column UI | ✅ Complete |
-| 7 | 7.1-7.3 | Persistence | ✅ Complete |
-| 8 | 8.1-8.3 | Integration & polish | 🔄 Next |
+**LP Position Column:**
+- Fetches ALL positions from Uniswap V3 subgraph (24 positions vs DeBank's 12)
+- Shows pool, fee tier, status (Active/Closed), deposited amounts
+- Checkbox selection for strategy building
 
-### Current Results (Test Wallet, 6 months)
+**GMX Trades Column:**
+- Flat trade list (not grouped by position)
+- Individual trade selection with checkboxes
+- Shows: market, side, action, size, price, P&L, timestamp
+- Reverse chronological sort (newest first)
 
-| Metric | Value |
-|--------|-------|
-| Total transactions (after MVT filter) | 616 |
-| Hidden transactions | 569 (spam, dust, bridges, swaps, approvals) |
-| Total positions | 27 |
-| Open positions | 16 |
-| Closed positions | 11 |
-| Matched transactions | 563 (91.4%) |
-| Unmatched transactions | 53 |
+**Strategy Column:**
+- Create strategies from selected LP positions + GMX trades
+- "Load to Ledger" sends strategy to Ledger page for P&L analysis
+- localStorage persistence
 
-### Files Created
+**Strategy Loading to Ledger:**
+- `POST /api/v1/build/strategy/load` endpoint
+- Enriches LP positions with subgraph data + DeBank unclaimed fees
+- Aggregates GMX trades into position-level summaries
+- Returns Ledger-compatible format with realized P&L
+
+### Implementation Status ✅ ALL COMPLETE
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| LP Position Discovery | Subgraph-based position fetching | ✅ Complete |
+| GMX Trade Discovery | Flat trade list from subgraph | ✅ Complete |
+| Individual Trade Selection | Checkbox UI for GMX trades | ✅ Complete |
+| Strategy Creation | Modal with LP + trade selection | ✅ Complete |
+| Strategy Loading | Load to Ledger with enrichment | ✅ Complete |
+| Code Professionalization | Cleanup, type hints, dead code removal | ✅ Complete |
+
+### Files (After Cleanup)
 
 **Backend:**
-- `backend/app/api/v1/build.py` - Build page API (1199 lines)
-- `backend/services/coingecko_prices.py` - Price enrichment (281 lines)
+- `backend/app/api/v1/build.py` - Build page API (980 lines)
+- `backend/services/thegraph.py` - Uniswap V3 Subgraph (998 lines)
+- `backend/services/gmx_subgraph.py` - GMX V2 Subgraph (1100+ lines)
+- `backend/services/discovery.py` - Transaction discovery (350 lines)
 - `backend/services/transaction_cache.py` - SQLite caching (334 lines)
-- `backend/services/discovery.py` - DeBank discovery (364 lines)
 
 **Frontend:**
-- `frontend/app/build/page.tsx` - Main Build page (432 lines)
-- `frontend/components/build/TransactionsColumn.tsx` - Left column (290 lines)
-- `frontend/components/build/PositionsColumn.tsx` - Middle column (429 lines)
-- `frontend/components/build/StrategiesColumn.tsx` - Right column (217 lines)
-- `frontend/components/build/CreateStrategyModal.tsx` - Strategy creation (301 lines)
+- `frontend/app/build/page.tsx` - Main Build page (1900+ lines, consolidated)
+- `frontend/components/LedgerMatrix.tsx` - Ledger view with strategy support
 
 ### API Endpoints
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /api/v1/build/transactions` | Filtered transactions |
-| `GET /api/v1/build/positions` | Open positions from DeBank |
-| `GET /api/v1/build/positions/with-transactions` | Main Build page endpoint |
-| `POST /api/v1/build/enrich-prices` | On-demand CoinGecko enrichment |
-| `GET /api/v1/build/cache-stats` | Cache statistics |
+| `GET /api/v1/build/uniswap-lp` | LP positions from subgraph |
+| `GET /api/v1/build/subgraph-only` | Pure subgraph position data |
+| `GET /api/v1/build/position-history/{id}` | LP transaction history |
+| `GET /api/v1/build/gmx-positions` | GMX positions (grouped) |
+| `GET /api/v1/build/gmx-trades` | GMX trades (flat list) |
+| `GET /api/v1/build/gmx-position-history/{key}` | GMX position history |
+| `POST /api/v1/build/strategy/load` | Load strategy for Ledger |
+| `POST /api/v1/build/strategy/debug` | Debug strategy request |
+
+---
+
+## 🧹 Code Professionalization (December 8, 2025)
+
+**Commit:** `9607949` - Professionalize codebase with cleanup, standardization, and dead code removal
+
+### Page Structure Changes
+
+| Before | After |
+|--------|-------|
+| Dashboard, Test, Reconcile, Ledger | Dashboard, Build, Ledger |
+| `/app/test/` | Renamed to `/app/build/` |
+| `/app/reconcile/` | **Deleted** |
+
+### Backend Cleanup
+
+**Removed Unused Services (4 files, ~1,100 lines):**
+- `backend/services/gmx.py` - Old GMX integration
+- `backend/services/coingecko_prices.py` - Price enrichment (replaced by subgraphs)
+- `backend/services/enrichment.py` - Generic enrichment
+- `backend/services/uniswap_pools.py` - Pool data fetching
+
+**Removed Unused Adapters (5 files, ~850 lines):**
+- `backend/services/adapters/` folder entirely
+- `__init__.py`, `base.py`, `euler.py`, `gmx_v2.py`, `uniswap_v3.py`
+
+**Code Quality Fixes:**
+- Removed 30+ lines of verbose debug logging from `debank.py`
+- Replaced `print()` with `logger.warning()` in `cache.py`
+- Fixed CORS configuration with environment-aware settings
+- Added `cors_origins_list` property to config
+
+### Code Standardization
+
+**Type Hints Modernized (11 files):**
+- Changed `Dict[` → `dict[` throughout
+- Changed `List[` → `list[` throughout
+- Removed unused typing imports
+- Files: `thegraph.py`, `build.py`, `gmx_subgraph.py`, `discovery.py`, `transactions.py`, `position_lifecycle.py`, `transaction_grouping.py`, `wallet.py`, etc.
+
+**Constants Added:**
+```python
+# gmx_subgraph.py
+GMX_USD_PRECISION = 10**30
+USDC_PRECISION = 10**6
+```
+
+### Frontend Cleanup
+
+**Removed Unused Components (12+ files, ~3,000 lines):**
+- `CreatePositionModal.tsx`, `CreateStrategyModal.tsx`
+- `FilterBar.tsx`, `QuickFilters.tsx`
+- `PositionsStrategiesPanel.tsx`, `ReconcileSummary.tsx`
+- `TransactionList.tsx`, `TransactionListSortable.tsx`
+- `TransactionRow.tsx`, `TransactionRowCompact.tsx`
+- `build/` folder components (old architecture)
+
+### Infrastructure Updates
+
+**docker-compose.yml:**
+- Removed deprecated `version: '3.8'`
+- Added backend health check
+
+```yaml
+healthcheck:
+  test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 10s
+```
+
+### Stats
+
+| Metric | Value |
+|--------|-------|
+| Files changed | 48 |
+| Lines removed | 10,680 |
+| Lines added | 3,535 |
+| Net reduction | **7,145 lines** |
 
 ---
 
@@ -661,7 +771,7 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 ## 📝 Notes & Decisions
 
 1. **Port Selection:** 4001/8004 chosen to avoid conflicts with covered-call-dashboard project
-2. **DeBank API:** Purchased 1M units - now only used for discovery, unclaimed fees, GMX rewards
+2. **DeBank API:** Purchased 1M units - used for discovery, unclaimed fees, GMX rewards, unrealized P&L
 3. **Subgraph Migration (Nov 25):** Moved from DeBank to protocol-specific subgraphs for real-time accuracy
 4. **No External Oracles:** All prices derived from on-chain data via protocol subgraphs (not CoinGecko)
 5. **Historical Price Calculation:** Per-token USD calculated at each mint block, not single timestamp
@@ -670,7 +780,9 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 8. **Incremental Development:** Drew prefers single-task focus with immediate testing
 9. **GitHub as Source of Truth:** All changes must be committed and pushed
 10. **Data Accuracy Benchmark:** Metrix Finance used as reference for data precision
-11. **Reconciliation System (Nov 26):** Full design documented in [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
+11. **Reconciliation Approach Evolved (Dec 8):** Original complex Reconcile page replaced with simpler Build page
+12. **Code Professionalization (Dec 8):** Major cleanup removing 7,000+ lines of dead code
+13. **Modern Python (Dec 8):** Type hints standardized to Python 3.9+ syntax (`dict` not `Dict`)
 
 ---
 
@@ -680,7 +792,8 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 - **Frontend:** http://localhost:4001
 - **Backend:** http://localhost:8004
 - **API Docs:** http://localhost:8004/docs (Swagger)
-- **Reconciliation Design:** [docs/RECONCILIATION_DESIGN.md](docs/RECONCILIATION_DESIGN.md)
+- **Architecture:** [docs/DATA_PIPELINE_ARCHITECTURE.md](docs/DATA_PIPELINE_ARCHITECTURE.md)
+- **Build Page Plan:** [docs/BUILD_PAGE_PLAN.md](docs/BUILD_PAGE_PLAN.md)
 
 ### Subgraph URLs
 - **Uniswap V3 (Ethereum):** `https://gateway.thegraph.com/api/{key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV`
@@ -692,6 +805,16 @@ curl http://localhost:8004/api/v1/wallet/0x23b50a703d3076b73584df48251931ebf5937
 | `GET /health` | Health check |
 | `GET /api/v1/wallet/{address}` | Basic positions (DeBank discovery) |
 | `GET /api/v1/wallet/{address}/ledger` | Full ledger with subgraph data |
+| `GET /api/v1/build/uniswap-lp` | LP positions from Uniswap subgraph |
+| `GET /api/v1/build/gmx-trades` | GMX trades (flat list) |
+| `POST /api/v1/build/strategy/load` | Load strategy for Ledger analysis |
+
+### Navigation
+| Page | Route | Purpose |
+|------|-------|---------|
+| Dashboard | `/` | Portfolio overview with position cards |
+| Build | `/build` | Strategy builder (3-column UI) |
+| Ledger | `/ledger` | Net exposure matrix and P&L analysis |
 
 ---
 
