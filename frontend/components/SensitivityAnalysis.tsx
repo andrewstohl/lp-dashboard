@@ -80,20 +80,35 @@ export function SensitivityAnalysis({
   const [thresholdAnalysis, setThresholdAnalysis] = useState<ThresholdAnalysis | null>(null);
   const [threshold, setThreshold] = useState(currentThreshold / 10000);  // Convert BPS to decimal
   const [intervalHours, setIntervalHours] = useState(4);
+  const [dataLimited, setDataLimited] = useState(false);  // True if data range was clamped
+
+  // CoinGecko free tier only allows 365 days of history
+  const MAX_HISTORY_DAYS = 365;
 
   const fetchData = async () => {
     setLoading(true);
     setError(null);
+    setDataLimited(false);
 
     try {
+      const now = Math.floor(Date.now() / 1000);
+      const maxHistoryTimestamp = now - (MAX_HISTORY_DAYS * 24 * 60 * 60);
+
+      // Clamp from_timestamp to max 365 days ago
+      let fromTimestamp = positionMintTimestamp;
+      if (positionMintTimestamp < maxHistoryTimestamp) {
+        fromTimestamp = maxHistoryTimestamp;
+        setDataLimited(true);
+      }
+
       const response = await fetch(`${API_BASE}/api/v1/build/price-ratio-history`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           symbol1,
           symbol2,
-          from_timestamp: positionMintTimestamp,
-          to_timestamp: Math.floor(Date.now() / 1000),
+          from_timestamp: fromTimestamp,
+          to_timestamp: now,
           interval_hours: intervalHours,
           threshold: threshold,
         }),
@@ -251,6 +266,13 @@ export function SensitivityAnalysis({
 
         {data.length > 0 && (
           <>
+            {/* Data Limited Warning */}
+            {dataLimited && (
+              <div className="mb-4 px-3 py-2 bg-[#9e6a03]/10 rounded border border-[#9e6a03]/30 text-sm text-[#F59E0B]">
+                Historical data limited to last 365 days (CoinGecko free tier). Position is older than available data.
+              </div>
+            )}
+
             {/* Statistics Cards */}
             {stats && (
               <div className="grid grid-cols-4 gap-4 mb-6">
