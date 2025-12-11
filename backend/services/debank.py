@@ -28,17 +28,22 @@ class DeBankService:
         """Close HTTP client"""
         await self.client.aclose()
 
-    async def get_wallet_positions(self, address: str) -> dict[str, Any]:
+    async def get_wallet_positions(self, address: str, force_refresh: bool = False) -> dict[str, Any]:
         """
         Fetch all DeFi positions for a wallet with caching
-        Returns: Dict with positions and metadata
+
+        Args:
+            address: Wallet address to fetch positions for
+            force_refresh: If True, bypass cache and fetch fresh data from API
+
+        Returns: Dict with positions, metadata, and freshness info
         """
         # Validate address format
         if not address.startswith("0x") or len(address) != 42:
             raise InvalidAddressError(address)
 
-        # Try cache first
-        if self.cache:
+        # Try cache first (unless force_refresh is True)
+        if self.cache and not force_refresh:
             cache_key = cache_key_for_wallet(address)
             cached_data, is_stale = await self.cache.get_with_stale(cache_key)
 
@@ -50,8 +55,8 @@ class DeBankService:
                     "is_stale": is_stale
                 }
 
-        # Cache miss - fetch from API
-        logger.info(f"Cache MISS for {address} - fetching from DeBank API")
+        # Cache miss or force_refresh - fetch from API
+        logger.info(f"{'Force refresh' if force_refresh else 'Cache MISS'} for {address} - fetching from DeBank API")
 
         try:
             # Check circuit breaker

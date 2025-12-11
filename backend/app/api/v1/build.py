@@ -14,6 +14,7 @@ from backend.services.discovery import TransactionDiscoveryService
 from backend.services.thegraph import TheGraphService
 from backend.services.gmx_subgraph import GMXSubgraphService
 from backend.services.debank import get_debank_service
+from backend.services.coingecko import CoinGeckoService
 from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -550,6 +551,7 @@ class StrategyLoadRequest(BaseModel):
     wallet: str  # Needed for DeBank enrichment
     lp_items: list[StrategyLPItem] = []
     gmx_items: list[StrategyGMXTradeItem] = []
+    force_refresh: bool = True  # Always fetch fresh data by default
 
 
 @router.post("/strategy/debug")
@@ -699,13 +701,15 @@ async def load_strategy_for_ledger(
     Load and enrich a strategy for Ledger analysis.
 
     This endpoint mirrors the wallet/ledger endpoint data pipeline:
-    1. Uses DeBank for unclaimed LP fees (real-time)
+    1. Uses DeBank for unclaimed LP fees (force_refresh for real-time)
     2. Uses Uniswap Subgraph for LP position data and claimed fees
-    3. Aggregates GMX trades and returns perpHistory for realized P&L
+    3. Uses GMX Subgraph for LIVE perp data (mark_price, entry_price, pnl)
+    4. Aggregates GMX trades and returns perpHistory for realized P&L
 
     Returns the same data structure as wallet/ledger endpoint.
     """
-    logger.info(f"Strategy load request received: wallet={request.wallet}, lp_items={len(request.lp_items)}, gmx_items={len(request.gmx_items)}")
+    fetch_timestamp = datetime.utcnow().isoformat()
+    logger.info(f"Strategy load request received: wallet={request.wallet}, lp_items={len(request.lp_items)}, gmx_items={len(request.gmx_items)}, force_refresh={request.force_refresh}")
     try:
         wallet = request.wallet.lower()
         lp_items = request.lp_items
@@ -714,14 +718,15 @@ async def load_strategy_for_ledger(
         logger.info(f"Loading strategy with {len(lp_items)} LP items and {len(gmx_items)} GMX items")
 
         # ================================================================
-        # 0. Get DeBank positions for unclaimed fees AND live perp data
+        # 0. Get DeBank positions for unclaimed LP fees (force refresh)
         # ================================================================
         debank_lp_positions_by_id = {}
-        debank_perp_positions = []  # For unrealized P&L on active positions
+        debank_perp_positions = []  # For fallback only - prefer GMX subgraph
 
         try:
             debank = await get_debank_service()
-            debank_result = await debank.get_wallet_positions(wallet)
+            # Always force refresh to get real-time unclaimed fees
+            debank_result = await debank.get_wallet_positions(wallet, force_refresh=request.force_refresh)
             debank_positions = debank_result.get("positions", [])
 
             # Separate LP and perp positions
@@ -874,11 +879,11 @@ async def load_strategy_for_ledger(
         aggregated_perp_positions = aggregate_gmx_trades_to_positions(gmx_items)
 
         # ================================================================
-        # 2b. Enrich ACTIVE positions with DeBank live data for unrealized P&L
+        # 2b. Enrich ACTIVE positions with LIVE data from GMX Subgraph
         # ================================================================
-        # DeBank provides real-time unrealized P&L for live positions
-        # This is more accurate than calculating from prices since it includes
-        # funding fees and other adjustments
+        # PRIMARY: GMX Subgraph (real-time mark_price from tokenPrice entity)
+        # FALLBACK: DeBank (for entry_price if subgraph doesn't have it)
+        # FINAL FALLBACK: CoinGecko (if neither has mark_price)
 
         def normalize_market(symbol: str) -> str:
             """Normalize market symbols for matching (ETH/WETH, BTC/WBTC)"""
@@ -889,6 +894,34 @@ async def load_strategy_for_ledger(
                 return "BTC"
             return upper
 
+        # Fetch LIVE perp positions from GMX subgraph (like wallet/ledger does)
+        gmx_subgraph_positions = []
+        try:
+            gmx_subgraph = GMXSubgraphService()
+            gmx_subgraph_positions = await gmx_subgraph.get_full_positions(wallet)
+            await gmx_subgraph.close()
+            logger.info(f"Fetched {len(gmx_subgraph_positions)} live positions from GMX subgraph")
+        except Exception as e:
+            logger.warning(f"Could not fetch GMX subgraph positions: {e}")
+
+        def find_matching_subgraph_perp(
+            subgraph_positions: list[dict],
+            market: str,
+            side: str
+        ) -> Optional[dict]:
+            """Find a GMX subgraph position matching the strategy position"""
+            normalized_market = normalize_market(market)
+
+            for pos in subgraph_positions:
+                # GMX subgraph positions have base_token.symbol and side
+                base_symbol = pos.get("base_token", {}).get("symbol", "")
+                pos_side = pos.get("side", "")
+
+                if normalize_market(base_symbol) == normalized_market and pos_side == side:
+                    return pos
+
+            return None
+
         def find_matching_debank_perp(
             debank_positions: list[dict],
             market: str,
@@ -898,7 +931,6 @@ async def load_strategy_for_ledger(
             normalized_market = normalize_market(market)
 
             for pos in debank_positions:
-                # DeBank perp positions have base_token.symbol and side
                 base_symbol = pos.get("base_token", {}).get("symbol", "")
                 pos_side = pos.get("side", "")
 
@@ -907,34 +939,91 @@ async def load_strategy_for_ledger(
 
             return None
 
-        # Enrich active positions with DeBank live data
+        # Enrich active positions with live data
         for perp in aggregated_perp_positions:
             if perp.get("status") != "ACTIVE":
                 continue
 
-            # Market is stored in base_token.symbol in the aggregated structure
             market = perp.get("base_token", {}).get("symbol", "")
             side = perp.get("side", "")
 
-            # Find matching DeBank position
-            live_position = find_matching_debank_perp(debank_perp_positions, market, side)
+            # PRIMARY: Try GMX subgraph first (real-time, no cache)
+            subgraph_pos = find_matching_subgraph_perp(gmx_subgraph_positions, market, side)
 
-            if live_position:
-                # Use DeBank's unrealized P&L directly - it's more accurate
-                unrealized_pnl = live_position.get("pnl_usd", 0)
-                mark_price = live_position.get("base_token", {}).get("price", 0)
+            if subgraph_pos:
+                # Use GMX subgraph's mark_price (from tokenPrice entity, always fresh)
+                subgraph_mark_price = subgraph_pos.get("mark_price", 0)
+                subgraph_entry_price = subgraph_pos.get("entry_price", 0)
+                subgraph_pnl = subgraph_pos.get("pnl_usd", 0)
 
-                perp["pnl_usd"] = unrealized_pnl
-                perp["mark_price"] = mark_price
+                if subgraph_mark_price > 0:
+                    perp["mark_price"] = subgraph_mark_price
+                    if "base_token" in perp:
+                        perp["base_token"]["price"] = subgraph_mark_price
 
-                logger.info(
-                    f"Enriched {side} {market} with DeBank live data: "
-                    f"unrealized_pnl=${unrealized_pnl:.2f}, mark_price=${mark_price:.2f}"
-                )
+                if subgraph_entry_price > 0:
+                    perp["entry_price"] = subgraph_entry_price
+
+                perp["pnl_usd"] = subgraph_pnl
+                perp["_data_source"] = "gmx_subgraph"
+                logger.info(f"GMX Subgraph: {side} {market} entry=${subgraph_entry_price:.2f}, mark=${subgraph_mark_price:.2f}, pnl=${subgraph_pnl:.2f}")
             else:
-                logger.warning(
-                    f"No DeBank match found for {side} {market} - unrealized P&L unavailable"
-                )
+                # FALLBACK: Try DeBank (may be cached)
+                debank_pos = find_matching_debank_perp(debank_perp_positions, market, side)
+
+                if debank_pos:
+                    debank_entry_price = debank_pos.get("entry_price", 0)
+                    debank_mark_price = debank_pos.get("mark_price", 0)
+                    unrealized_pnl = debank_pos.get("pnl_usd", 0)
+
+                    if debank_entry_price > 0:
+                        perp["entry_price"] = debank_entry_price
+                    if debank_mark_price > 0:
+                        perp["mark_price"] = debank_mark_price
+                        if "base_token" in perp:
+                            perp["base_token"]["price"] = debank_mark_price
+
+                    perp["pnl_usd"] = unrealized_pnl
+                    perp["_data_source"] = "debank"
+                    logger.info(f"DeBank fallback: {side} {market} entry=${debank_entry_price:.2f}, mark=${debank_mark_price:.2f}, pnl=${unrealized_pnl:.2f}")
+                else:
+                    perp["_data_source"] = "aggregated_trades"
+                    logger.warning(f"No live data found for {side} {market} - using aggregated trade values")
+
+        # FINAL FALLBACK: CoinGecko for any positions still missing mark_price
+        positions_needing_price = [
+            p for p in aggregated_perp_positions
+            if p.get("status") == "ACTIVE" and p.get("mark_price", 0) == 0
+        ]
+
+        if positions_needing_price:
+            try:
+                coingecko = CoinGeckoService()
+                symbols = list(set(
+                    p.get("base_token", {}).get("symbol", "")
+                    for p in positions_needing_price
+                    if p.get("base_token", {}).get("symbol")
+                ))
+
+                if symbols:
+                    live_prices = await coingecko.get_current_prices(symbols)
+                    logger.info(f"CoinGecko fallback prices: {live_prices}")
+
+                    for perp in positions_needing_price:
+                        market = perp.get("base_token", {}).get("symbol", "")
+                        normalized = normalize_market(market)
+                        live_price = live_prices.get(normalized) or live_prices.get(market.upper())
+
+                        if live_price and live_price > 0:
+                            perp["mark_price"] = live_price
+                            if "base_token" in perp:
+                                perp["base_token"]["price"] = live_price
+                            perp["_data_source"] = "coingecko"
+                            logger.info(f"CoinGecko fallback: {perp.get('side')} {market} mark_price=${live_price:.2f}")
+
+                await coingecko.close()
+            except Exception as e:
+                logger.warning(f"CoinGecko fallback failed: {e}")
 
         # Calculate total realized P&L from all perp positions
         total_realized_pnl = sum(p.get("realized_pnl_usd", 0) for p in aggregated_perp_positions)
@@ -956,6 +1045,7 @@ async def load_strategy_for_ledger(
                     "total_funding_claimed": 0  # Would need additional query
                 },
                 "total_gas_fees_usd": sum(p.get("gas_fees_usd", 0) for p in enriched_lp_positions),
+                "fetched_at": fetch_timestamp,  # When this data was fetched
                 "summary": {
                     "lp_count": len(enriched_lp_positions),
                     "perp_count": len(aggregated_perp_positions),
@@ -966,9 +1056,11 @@ async def load_strategy_for_ledger(
                 },
                 "data_sources": {
                     "lp_positions": "uniswap_subgraph",
-                    "unclaimed_fees": "debank",
-                    "perp_positions": "strategy_trades",
-                    "unrealized_pnl": "debank",
+                    "unclaimed_fees": "debank (force_refresh)" if request.force_refresh else "debank (cached)",
+                    "perp_mark_price": "gmx_subgraph (real-time)",
+                    "perp_entry_price": "gmx_subgraph (real-time)",
+                    "perp_unrealized_pnl": "gmx_subgraph (real-time)",
+                    "fallback_price": "coingecko",
                 }
             }
         }

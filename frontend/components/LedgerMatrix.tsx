@@ -42,6 +42,14 @@ interface TokenExposure {
   perpFunding: number;
   perpSubtotal: number;
   totalPnl: number;
+  // Hedge deviation tracking
+  entryPrice: number;
+  markPrice: number;
+  effectiveHedge: number;  // perpValue * (markPrice / entryPrice)
+  targetHedge: number;     // currentLpValue * (targetRatio / 100)
+  hedgeGap: number;        // effectiveHedge - targetHedge (signed)
+  deviationBps: number;    // |gap| / currentLpValue * 10000
+  needsRebalance: boolean; // deviation > threshold
 }
 
 interface MatchedPosition {
@@ -65,6 +73,12 @@ interface MatchedPosition {
   totalGasFees: number;
   grandTotalPnl: number;
   hedgeRatio: number;
+  // Aggregate hedge deviation tracking
+  totalEffectiveHedge: number;
+  totalTargetHedge: number;
+  totalHedgeGap: number;
+  totalDeviationBps: number;
+  anyNeedsRebalance: boolean;
 }
 
 // Normalize token symbols for matching (ETH/WETH, BTC/WBTC, etc.)
@@ -86,6 +100,8 @@ const tokensMatch = (symbol1: string, symbol2: string): boolean => {
 
 export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHistory, totalGasFees = 0 }: LedgerMatrixProps) {
   const [expandedPositions, setExpandedPositions] = useState<Set<number>>(new Set());
+  const [targetRatio, setTargetRatio] = useState<number>(100); // Target hedge ratio as percentage
+  const [deviationThreshold, setDeviationThreshold] = useState<number>(800); // Threshold in BPS
 
   const toggleExpanded = (index: number) => {
     const newExpanded = new Set(expandedPositions);
@@ -187,6 +203,34 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
     const perp1RealizedPnl = token1Perp?.realized_pnl_usd ??
       (totalMargin > 0 ? globalRealizedPnl * (perp1Margin / totalMargin) : 0);
 
+    // Hedge deviation calculations
+    // Effective Hedge = Perp Size ($) × (Mark Price / Entry Price)
+    // This adjusts hedge value for price movement since entry
+    const entry0 = token0Perp?.entry_price ?? 0;
+    const mark0 = token0Perp?.mark_price ?? token0Perp?.base_token.price ?? 0;
+    const entry1 = token1Perp?.entry_price ?? 0;
+    const mark1 = token1Perp?.mark_price ?? token1Perp?.base_token.price ?? 0;
+
+    // Calculate effective hedge (adjusting perp value for price movement)
+    const effective0 = entry0 > 0 ? Math.abs(perp0Value) * (mark0 / entry0) : Math.abs(perp0Value);
+    const effective1 = entry1 > 0 ? Math.abs(perp1Value) * (mark1 / entry1) : Math.abs(perp1Value);
+
+    // Target hedge based on configurable ratio
+    const target0 = lp.token0.value_usd * (targetRatio / 100);
+    const target1 = lp.token1.value_usd * (targetRatio / 100);
+
+    // Gap = effective - target (negative means under-hedged)
+    const gap0 = effective0 - target0;
+    const gap1 = effective1 - target1;
+
+    // Deviation in BPS = |gap| / currentLpValue × 10000
+    const deviation0 = lp.token0.value_usd > 0 ? Math.abs(gap0) / lp.token0.value_usd * 10000 : 0;
+    const deviation1 = lp.token1.value_usd > 0 ? Math.abs(gap1) / lp.token1.value_usd * 10000 : 0;
+
+    // Per-asset rebalance trigger
+    const needs0Rebalance = deviation0 > deviationThreshold;
+    const needs1Rebalance = deviation1 > deviationThreshold;
+
     const token0: TokenExposure = {
       symbol: token0Symbol,
       initialLpAmount: initial0Amount,
@@ -210,6 +254,14 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
       perpFunding: perp0Funding,
       perpSubtotal: perp0Pnl + perp0RealizedPnl,
       totalPnl: (lp.token0.value_usd - initial0Value) + claimed0 + unclaimed0 + perp0Pnl + perp0RealizedPnl,
+      // Hedge deviation tracking
+      entryPrice: entry0,
+      markPrice: mark0,
+      effectiveHedge: effective0,
+      targetHedge: target0,
+      hedgeGap: gap0,
+      deviationBps: deviation0,
+      needsRebalance: needs0Rebalance,
     };
 
     const token1: TokenExposure = {
@@ -235,6 +287,14 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
       perpFunding: perp1Funding,
       perpSubtotal: perp1Pnl + perp1RealizedPnl,
       totalPnl: (lp.token1.value_usd - initial1Value) + claimed1 + unclaimed1 + perp1Pnl + perp1RealizedPnl,
+      // Hedge deviation tracking
+      entryPrice: entry1,
+      markPrice: mark1,
+      effectiveHedge: effective1,
+      targetHedge: target1,
+      hedgeGap: gap1,
+      deviationBps: deviation1,
+      needsRebalance: needs1Rebalance,
     };
 
     const totalLpPnl = token0.lpPnl + token1.lpPnl;
@@ -244,6 +304,12 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
     const gasFees = lp.gas_fees_usd ?? 0;
     const grandTotal = totalLpPnl + token0.feesSubtotal + token1.feesSubtotal + totalPerpSubtotal;
     const hedgeRatio = totalCurrentValue > 0 ? (Math.abs(totalPerpValue) / totalCurrentValue) * 100 : 0;
+
+    // Aggregate hedge deviation values
+    const totalEffectiveHedgeVal = effective0 + effective1;
+    const totalTargetHedgeVal = target0 + target1;
+    const totalHedgeGapVal = gap0 + gap1;
+    const totalDeviationBpsVal = totalCurrentValue > 0 ? Math.abs(totalHedgeGapVal) / totalCurrentValue * 10000 : 0;
 
     return {
       lpPosition: lp,
@@ -266,6 +332,12 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
       totalGasFees: gasFees,
       grandTotalPnl: grandTotal,
       hedgeRatio,
+      // Aggregate hedge deviation tracking
+      totalEffectiveHedge: totalEffectiveHedgeVal,
+      totalTargetHedge: totalTargetHedgeVal,
+      totalHedgeGap: totalHedgeGapVal,
+      totalDeviationBps: totalDeviationBpsVal,
+      anyNeedsRebalance: needs0Rebalance || needs1Rebalance,
     };
   });
 
@@ -335,9 +407,38 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
               <div className="bg-[#0D1117]">
                 {/* POSITION ANALYSIS - Separate Card */}
                 <div className="m-4 bg-[#161B22] rounded-lg border border-[#30363d]">
-                  <div className="px-4 py-3 border-b border-[#30363d]">
-                    <h4 className="text-sm font-semibold text-[#E6EDF3]">Position Analysis</h4>
-                    <p className="text-xs text-[#8B949E] mt-0.5">Current exposure and hedge status</p>
+                  <div className="px-4 py-3 border-b border-[#30363d] flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-[#E6EDF3]">Position Analysis</h4>
+                      <p className="text-xs text-[#8B949E] mt-0.5">Current exposure and hedge status</p>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-[#8B949E]">Target Ratio</label>
+                        <input
+                          type="number"
+                          value={targetRatio}
+                          onChange={(e) => setTargetRatio(Number(e.target.value))}
+                          className="w-16 px-2 py-1 text-xs bg-[#0D1117] border border-[#30363d] rounded text-[#E6EDF3] text-right"
+                          min={0}
+                          max={200}
+                        />
+                        <span className="text-xs text-[#8B949E]">%</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs text-[#8B949E]">Threshold</label>
+                        <input
+                          type="number"
+                          value={deviationThreshold}
+                          onChange={(e) => setDeviationThreshold(Number(e.target.value))}
+                          className="w-20 px-2 py-1 text-xs bg-[#0D1117] border border-[#30363d] rounded text-[#E6EDF3] text-right"
+                          min={0}
+                          max={5000}
+                          step={100}
+                        />
+                        <span className="text-xs text-[#8B949E]">BPS</span>
+                      </div>
+                    </div>
                   </div>
                   <div className="p-4">
                     <table className="w-full text-sm">
@@ -414,6 +515,79 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                             </span>
                           </td>
                         </tr>
+                        {/* Hedge Deviation Tracking */}
+                        <tr className="border-b border-[#21262d] bg-[#0D1117]/50">
+                          <td className="py-3 text-[#58A6FF] font-medium">Target Hedge</td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token0.targetHedge)}</div>
+                            <div className="text-xs text-[#8B949E]">{targetRatio}% of LP</div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token1.targetHedge)}</div>
+                            <div className="text-xs text-[#8B949E]">{targetRatio}% of LP</div>
+                          </td>
+                          <td className="py-3 text-right">{formatUsd(matched.totalTargetHedge)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d] bg-[#0D1117]/50">
+                          <td className="py-3 text-[#58A6FF] font-medium">Effective Hedge</td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token0.effectiveHedge)}</div>
+                            {token0.entryPrice > 0 && (
+                              <div className="text-xs text-[#8B949E]">
+                                ${token0.entryPrice.toFixed(2)} → ${token0.markPrice.toFixed(2)}
+                                {" "}
+                                <span className={token0.markPrice >= token0.entryPrice ? "text-[#3FB950]" : "text-[#F85149]"}>
+                                  ({token0.entryPrice > 0 ? ((token0.markPrice / token0.entryPrice - 1) * 100).toFixed(1) : "0"}%)
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 text-right">
+                            <div>{formatUsd(token1.effectiveHedge)}</div>
+                            {token1.entryPrice > 0 && (
+                              <div className="text-xs text-[#8B949E]">
+                                ${token1.entryPrice.toFixed(2)} → ${token1.markPrice.toFixed(2)}
+                                {" "}
+                                <span className={token1.markPrice >= token1.entryPrice ? "text-[#3FB950]" : "text-[#F85149]"}>
+                                  ({token1.entryPrice > 0 ? ((token1.markPrice / token1.entryPrice - 1) * 100).toFixed(1) : "0"}%)
+                                </span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 text-right">{formatUsd(matched.totalEffectiveHedge)}</td>
+                        </tr>
+                        <tr className="border-b border-[#21262d] bg-[#0D1117]/50">
+                          <td className="py-3 text-[#58A6FF] font-medium">Deviation</td>
+                          <td className="py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span className={token0.needsRebalance ? "text-[#F59E0B]" : "text-[#3FB950]"}>
+                                {token0.deviationBps.toFixed(0)} BPS
+                              </span>
+                              <span className="text-lg">{token0.needsRebalance ? "⚠️" : "✓"}</span>
+                            </div>
+                            <div className="text-xs text-[#8B949E]">
+                              Gap: {token0.hedgeGap >= 0 ? "+" : ""}{formatUsd(token0.hedgeGap)}
+                            </div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span className={token1.needsRebalance ? "text-[#F59E0B]" : "text-[#3FB950]"}>
+                                {token1.deviationBps.toFixed(0)} BPS
+                              </span>
+                              <span className="text-lg">{token1.needsRebalance ? "⚠️" : "✓"}</span>
+                            </div>
+                            <div className="text-xs text-[#8B949E]">
+                              Gap: {token1.hedgeGap >= 0 ? "+" : ""}{formatUsd(token1.hedgeGap)}
+                            </div>
+                          </td>
+                          <td className="py-3 text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <span className={matched.anyNeedsRebalance ? "text-[#F59E0B]" : "text-[#3FB950]"}>
+                                {matched.totalDeviationBps.toFixed(0)} BPS
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
                         <tr>
                           <td className="py-3 font-medium">Net Exposure</td>
                           <td className="py-3 text-right">
@@ -431,6 +605,50 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Rebalance Actions - Only shown when threshold exceeded */}
+                  {matched.anyNeedsRebalance && (
+                    <div className="px-4 py-3 border-t border-[#30363d] bg-[#9e6a03]/10">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-lg">⚠️</span>
+                        <h5 className="text-sm font-semibold text-[#F59E0B]">Rebalance Actions Required</h5>
+                      </div>
+                      <div className="space-y-2">
+                        {token0.needsRebalance && (
+                          <div className="flex items-center justify-between py-2 px-3 bg-[#0D1117] rounded border border-[#30363d]">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-[#E6EDF3]">{token0.symbol}</span>
+                              <span className="text-xs text-[#8B949E]">
+                                {token0.hedgeGap > 0 ? "Over-hedged" : "Under-hedged"} by {formatUsd(Math.abs(token0.hedgeGap))}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className={`text-sm font-medium ${token0.hedgeGap > 0 ? "text-[#3FB950]" : "text-[#F85149]"}`}>
+                                {token0.hedgeGap > 0 ? "Reduce" : "Increase"} short by {formatUsd(Math.abs(token0.hedgeGap))}
+                              </span>
+                              <span className="text-xs text-[#F59E0B] font-medium">{token0.deviationBps.toFixed(0)} BPS</span>
+                            </div>
+                          </div>
+                        )}
+                        {token1.needsRebalance && (
+                          <div className="flex items-center justify-between py-2 px-3 bg-[#0D1117] rounded border border-[#30363d]">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-[#E6EDF3]">{token1.symbol}</span>
+                              <span className="text-xs text-[#8B949E]">
+                                {token1.hedgeGap > 0 ? "Over-hedged" : "Under-hedged"} by {formatUsd(Math.abs(token1.hedgeGap))}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className={`text-sm font-medium ${token1.hedgeGap > 0 ? "text-[#3FB950]" : "text-[#F85149]"}`}>
+                                {token1.hedgeGap > 0 ? "Reduce" : "Increase"} short by {formatUsd(Math.abs(token1.hedgeGap))}
+                              </span>
+                              <span className="text-xs text-[#F59E0B] font-medium">{token1.deviationBps.toFixed(0)} BPS</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* PERFORMANCE ANALYSIS - Separate Card */}
@@ -445,7 +663,7 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-[#30363d]">
-                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-40"></th>
+                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
