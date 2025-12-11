@@ -441,10 +441,16 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                     </div>
                   </div>
                   <div className="p-4">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm table-fixed">
+                      <colgroup>
+                        <col className="w-32" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                      </colgroup>
                       <thead>
                         <tr className="border-b border-[#30363d]">
-                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
+                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide"></th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
@@ -660,10 +666,16 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                   
                   {/* Detailed breakdown */}
                   <div className="p-4 border-b border-[#30363d]">
-                    <table className="w-full text-sm">
+                    <table className="w-full text-sm table-fixed">
+                      <colgroup>
+                        <col className="w-32" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                        <col className="w-1/4" />
+                      </colgroup>
                       <thead>
                         <tr className="border-b border-[#30363d]">
-                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide w-32"></th>
+                          <th className="pb-3 text-left text-xs font-medium text-[#8B949E] uppercase tracking-wide"></th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token0.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">{token1.symbol}</th>
                           <th className="pb-3 text-right text-xs font-medium text-[#8B949E] uppercase tracking-wide">Total</th>
