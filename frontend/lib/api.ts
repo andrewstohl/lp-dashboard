@@ -194,6 +194,10 @@ export interface LPPosition {
   position_mint_timestamp?: number;  // Unix timestamp of position creation
   gas_fees_usd?: number;
   transaction_count?: number;
+  // Tick range for concentrated liquidity bounds
+  tick_lower?: number;
+  tick_upper?: number;
+  current_tick?: number;
 }
 
 // GMX Perpetual Position (enriched)

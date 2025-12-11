@@ -120,7 +120,11 @@ async def get_wallet_ledger(
                 "claimed_fees": lp_subgraph["collected_fees"],
                 "position_mint_timestamp": mint_ts,
                 "gas_fees_usd": lp_subgraph.get("gas_fees_usd", 0),
-                "transaction_count": lp_subgraph.get("transaction_count", 0)
+                "transaction_count": lp_subgraph.get("transaction_count", 0),
+                # Tick range for price bounds visualization
+                "tick_lower": lp_subgraph.get("tick_lower"),
+                "tick_upper": lp_subgraph.get("tick_upper"),
+                "current_tick": lp_subgraph.get("current_tick"),
             }
             enriched_lp_positions.append(enriched_lp)
         

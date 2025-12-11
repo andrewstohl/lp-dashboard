@@ -800,6 +800,8 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                   symbol2={token1.symbol}
                   positionMintTimestamp={lpPosition.position_mint_timestamp || 0}
                   currentThreshold={deviationThreshold}
+                  tickLower={lpPosition.tick_lower}
+                  tickUpper={lpPosition.tick_upper}
                 />
               </div>
             )}

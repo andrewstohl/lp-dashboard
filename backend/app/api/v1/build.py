@@ -854,6 +854,10 @@ async def load_strategy_for_ledger(
                             "transaction_count": full_position.get("transaction_count", len(transactions)),
                             "status": item.status,
                             "transactions": transactions,
+                            # Tick range for price bounds visualization
+                            "tick_lower": full_position.get("tick_lower"),
+                            "tick_upper": full_position.get("tick_upper"),
+                            "current_tick": full_position.get("current_tick"),
                             "data_sources": {
                                 "position": "uniswap_subgraph",
                                 "unclaimed_fees": "debank" if unclaimed_fees_usd > 0 else "none",

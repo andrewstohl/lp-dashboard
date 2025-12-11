@@ -51,15 +51,27 @@ interface SensitivityAnalysisProps {
   symbol2: string;  // e.g., "ETH"
   positionMintTimestamp: number;  // Unix timestamp of position creation
   currentThreshold?: number;  // Current threshold in BPS (e.g., 800)
+  // Tick range for concentrated liquidity bounds
+  tickLower?: number;
+  tickUpper?: number;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+// Convert Uniswap V3 tick to price ratio
+// Tick represents token1/token0 price (e.g., WETH/LINK)
+// Our chart shows token0_price/token1_price which equals token1/token0 pool price
+const tickToPrice = (tick: number): number => {
+  return Math.pow(1.0001, tick);
+};
 
 export function SensitivityAnalysis({
   symbol1,
   symbol2,
   positionMintTimestamp,
   currentThreshold = 800,
+  tickLower,
+  tickUpper,
 }: SensitivityAnalysisProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -290,6 +302,24 @@ export function SensitivityAnalysis({
                     width={70}
                   />
                   <Tooltip content={<CustomTooltip />} />
+
+                  {/* Concentrated Liquidity Range Bounds */}
+                  {tickLower !== undefined && tickUpper !== undefined && (
+                    <>
+                      <ReferenceLine
+                        y={tickToPrice(tickLower)}
+                        stroke="#A855F7"
+                        strokeWidth={2}
+                        label={{ value: "Range Low", fill: "#A855F7", fontSize: 10, position: "left" }}
+                      />
+                      <ReferenceLine
+                        y={tickToPrice(tickUpper)}
+                        stroke="#A855F7"
+                        strokeWidth={2}
+                        label={{ value: "Range High", fill: "#A855F7", fontSize: 10, position: "left" }}
+                      />
+                    </>
+                  )}
 
                   {/* Threshold bands */}
                   {thresholdAnalysis && (
