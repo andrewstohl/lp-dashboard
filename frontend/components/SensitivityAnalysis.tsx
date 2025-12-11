@@ -317,7 +317,16 @@ export function SensitivityAnalysis({
                     tickMargin={10}
                   />
                   <YAxis
-                    domain={["auto", "auto"]}
+                    domain={[
+                      (dataMin: number) => {
+                        const tickLowerPrice = tickLower !== undefined ? tickToPrice(tickLower) : dataMin;
+                        return Math.min(dataMin, tickLowerPrice) * 0.98;
+                      },
+                      (dataMax: number) => {
+                        const tickUpperPrice = tickUpper !== undefined ? tickToPrice(tickUpper) : dataMax;
+                        return Math.max(dataMax, tickUpperPrice) * 1.02;
+                      }
+                    ]}
                     tickFormatter={(v: number) => v.toFixed(5)}
                     stroke="#8B949E"
                     fontSize={11}
