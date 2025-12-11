@@ -2,14 +2,15 @@
 
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { 
-  type LPPosition, 
-  type PerpetualPosition, 
+import {
+  type LPPosition,
+  type PerpetualPosition,
   type GMXRewards,
   type PerpHistory,
-  formatCurrency, 
-  formatCompactCurrency 
+  formatCurrency,
+  formatCompactCurrency
 } from "@/lib/api";
+import { SensitivityAnalysis } from "./SensitivityAnalysis";
 
 interface LedgerMatrixProps {
   lpPositions: LPPosition[];
@@ -792,6 +793,14 @@ export function LedgerMatrix({ lpPositions, perpPositions, gmxRewards, perpHisto
                     </div>
                   </div>
                 </div>
+
+                {/* SENSITIVITY ANALYSIS - Price Ratio Chart */}
+                <SensitivityAnalysis
+                  symbol1={token0.symbol}
+                  symbol2={token1.symbol}
+                  positionMintTimestamp={lpPosition.position_mint_timestamp || 0}
+                  currentThreshold={deviationThreshold}
+                />
               </div>
             )}
           </div>

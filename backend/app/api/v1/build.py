@@ -1071,3 +1071,150 @@ async def load_strategy_for_ledger(
             "status": "error",
             "detail": {"error": str(e)}
         }
+
+
+# ============================================================================
+# Sensitivity Analysis - Price Ratio and Threshold Analysis
+# ============================================================================
+
+
+class PriceRatioRequest(BaseModel):
+    """Request for price ratio time series."""
+    symbol1: str  # e.g., "LINK"
+    symbol2: str  # e.g., "ETH"
+    from_timestamp: int  # Unix timestamp
+    to_timestamp: Optional[int] = None  # Default to now
+    interval_hours: int = 4  # 4H chart by default
+    threshold: Optional[float] = None  # Optional threshold for breach markers
+
+
+@router.post("/price-ratio-history")
+async def get_price_ratio_history(
+    request: PriceRatioRequest
+) -> dict[str, Any]:
+    """
+    Get price ratio time series between two tokens for sensitivity analysis.
+
+    Returns:
+    - Time series of price ratio (symbol1/symbol2)
+    - Optional threshold breach markers
+    - Statistics (mean, std, min, max)
+
+    Use for:
+    - Analyzing hedge effectiveness
+    - Optimizing rebalance thresholds
+    - Understanding price correlation between LP tokens
+    """
+    try:
+        from_ts = request.from_timestamp
+        to_ts = request.to_timestamp or int(datetime.utcnow().timestamp())
+
+        coingecko = CoinGeckoService()
+        ratio_data = await coingecko.get_price_ratio_time_series(
+            symbol1=request.symbol1,
+            symbol2=request.symbol2,
+            from_timestamp=from_ts,
+            to_timestamp=to_ts,
+            interval_hours=request.interval_hours
+        )
+        await coingecko.close()
+
+        if not ratio_data:
+            return {
+                "status": "error",
+                "detail": {"error": f"Could not fetch price data for {request.symbol1}/{request.symbol2}"}
+            }
+
+        # Calculate statistics
+        ratios = [d["ratio"] for d in ratio_data]
+        initial_ratio = ratios[0] if ratios else 0
+        current_ratio = ratios[-1] if ratios else 0
+
+        import statistics
+        mean_ratio = statistics.mean(ratios) if ratios else 0
+        std_ratio = statistics.stdev(ratios) if len(ratios) > 1 else 0
+        min_ratio = min(ratios) if ratios else 0
+        max_ratio = max(ratios) if ratios else 0
+
+        # Calculate threshold breaches if threshold provided
+        breaches = []
+        if request.threshold and request.threshold > 0:
+            # Threshold is a percentage deviation from initial ratio
+            # e.g., threshold=0.05 means trigger when ratio deviates 5% from initial
+            upper_bound = initial_ratio * (1 + request.threshold)
+            lower_bound = initial_ratio * (1 - request.threshold)
+
+            in_breach = False
+            breach_start = None
+            breach_direction = None
+
+            for i, point in enumerate(ratio_data):
+                ratio = point["ratio"]
+                is_breach = ratio > upper_bound or ratio < lower_bound
+
+                if is_breach and not in_breach:
+                    # Start of breach
+                    in_breach = True
+                    breach_start = point["timestamp"]
+                    breach_direction = "above" if ratio > upper_bound else "below"
+                elif not is_breach and in_breach:
+                    # End of breach
+                    in_breach = False
+                    breaches.append({
+                        "start_timestamp": breach_start,
+                        "end_timestamp": point["timestamp"],
+                        "direction": breach_direction,
+                        "peak_deviation": 0,  # Would need to track
+                    })
+                    breach_start = None
+
+            # Handle ongoing breach
+            if in_breach and breach_start:
+                breaches.append({
+                    "start_timestamp": breach_start,
+                    "end_timestamp": to_ts,
+                    "direction": breach_direction,
+                    "ongoing": True,
+                })
+
+        # Calculate deviation percentage at each point
+        for point in ratio_data:
+            if initial_ratio > 0:
+                point["deviation_pct"] = (point["ratio"] - initial_ratio) / initial_ratio * 100
+            else:
+                point["deviation_pct"] = 0
+
+        return {
+            "status": "success",
+            "data": {
+                "symbol1": request.symbol1,
+                "symbol2": request.symbol2,
+                "interval_hours": request.interval_hours,
+                "time_series": ratio_data,
+                "statistics": {
+                    "initial_ratio": initial_ratio,
+                    "current_ratio": current_ratio,
+                    "mean_ratio": mean_ratio,
+                    "std_ratio": std_ratio,
+                    "min_ratio": min_ratio,
+                    "max_ratio": max_ratio,
+                    "total_change_pct": ((current_ratio - initial_ratio) / initial_ratio * 100) if initial_ratio > 0 else 0,
+                    "volatility_pct": (std_ratio / mean_ratio * 100) if mean_ratio > 0 else 0,
+                },
+                "threshold_analysis": {
+                    "threshold": request.threshold,
+                    "breaches": breaches,
+                    "breach_count": len(breaches),
+                    "upper_bound": initial_ratio * (1 + request.threshold) if request.threshold else None,
+                    "lower_bound": initial_ratio * (1 - request.threshold) if request.threshold else None,
+                } if request.threshold else None,
+                "data_source": "coingecko",
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting price ratio history: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "detail": {"error": str(e)}
+        }

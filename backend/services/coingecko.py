@@ -161,7 +161,7 @@ class CoinGeckoService:
     ) -> dict[str, float]:
         """
         Get historical prices for multiple tokens at once
-        
+
         Returns:
             Dict mapping token address to price
         """
@@ -171,6 +171,125 @@ class CoinGeckoService:
             if price:
                 results[address.lower()] = price
         return results
+
+    async def get_price_time_series(
+        self,
+        symbol: str,
+        from_timestamp: int,
+        to_timestamp: int
+    ) -> list[dict]:
+        """
+        Get price time series for a token over a time range.
+
+        CoinGecko auto-determines granularity based on range:
+        - 1 day: 5-minute intervals
+        - 2-90 days: hourly intervals
+        - 90+ days: daily intervals
+
+        Args:
+            symbol: Token symbol (e.g., "LINK", "ETH")
+            from_timestamp: Start Unix timestamp
+            to_timestamp: End Unix timestamp
+
+        Returns:
+            List of {timestamp, price} dicts
+        """
+        coingecko_id = SYMBOL_TO_COINGECKO.get(symbol.upper())
+        if not coingecko_id:
+            logger.warning(f"No CoinGecko ID mapping for symbol: {symbol}")
+            return []
+
+        try:
+            response = await self.client.get(
+                f"/coins/{coingecko_id}/market_chart/range",
+                params={
+                    "vs_currency": "usd",
+                    "from": from_timestamp,
+                    "to": to_timestamp
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # CoinGecko returns prices as [[timestamp_ms, price], ...]
+            prices = data.get("prices", [])
+            result = []
+            for item in prices:
+                result.append({
+                    "timestamp": int(item[0] / 1000),  # Convert ms to seconds
+                    "price": item[1]
+                })
+
+            logger.info(f"Fetched {len(result)} price points for {symbol}")
+            return result
+
+        except Exception as e:
+            logger.error(f"Error fetching price time series for {symbol}: {e}")
+            return []
+
+    async def get_price_ratio_time_series(
+        self,
+        symbol1: str,
+        symbol2: str,
+        from_timestamp: int,
+        to_timestamp: int,
+        interval_hours: int = 4
+    ) -> list[dict]:
+        """
+        Get price ratio time series between two tokens.
+
+        Args:
+            symbol1: Numerator token symbol (e.g., "LINK")
+            symbol2: Denominator token symbol (e.g., "ETH")
+            from_timestamp: Start Unix timestamp
+            to_timestamp: End Unix timestamp
+            interval_hours: Resample to this interval (default 4H)
+
+        Returns:
+            List of {timestamp, price1, price2, ratio} dicts
+        """
+        # Fetch both price series
+        prices1 = await self.get_price_time_series(symbol1, from_timestamp, to_timestamp)
+        prices2 = await self.get_price_time_series(symbol2, from_timestamp, to_timestamp)
+
+        if not prices1 or not prices2:
+            return []
+
+        # Create lookup dicts by timestamp (rounded to hour)
+        def round_to_hour(ts: int) -> int:
+            return (ts // 3600) * 3600
+
+        prices1_by_hour = {round_to_hour(p["timestamp"]): p["price"] for p in prices1}
+        prices2_by_hour = {round_to_hour(p["timestamp"]): p["price"] for p in prices2}
+
+        # Find common timestamps and resample to interval
+        interval_seconds = interval_hours * 3600
+        common_hours = sorted(set(prices1_by_hour.keys()) & set(prices2_by_hour.keys()))
+
+        if not common_hours:
+            return []
+
+        # Resample to desired interval
+        result = []
+        current_ts = common_hours[0]
+
+        while current_ts <= common_hours[-1]:
+            # Find nearest available timestamp
+            nearest = min(common_hours, key=lambda x: abs(x - current_ts))
+            if abs(nearest - current_ts) <= interval_seconds:
+                p1 = prices1_by_hour.get(nearest, 0)
+                p2 = prices2_by_hour.get(nearest, 0)
+                if p1 > 0 and p2 > 0:
+                    result.append({
+                        "timestamp": nearest,
+                        "price1": p1,
+                        "price2": p2,
+                        "ratio": p1 / p2
+                    })
+            current_ts += interval_seconds
+
+        logger.info(f"Generated {len(result)} ratio points for {symbol1}/{symbol2}")
+        return result
 
 
 # Global service instance

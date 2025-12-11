@@ -191,6 +191,7 @@ export interface LPPosition {
   initial_deposits?: InitialDeposit;
   initial_total_value_usd?: number;
   claimed_fees?: { token0: number; token1: number; total: number };
+  position_mint_timestamp?: number;  // Unix timestamp of position creation
   gas_fees_usd?: number;
   transaction_count?: number;
 }
